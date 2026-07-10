@@ -23,6 +23,11 @@ const GROUPS: { id: string; title: string; match: (key: string) => boolean }[] =
     match: (k) => k.includes(".mode."),
   },
   {
+    id: "position",
+    title: "Позиции в договоре (Phase 5)",
+    match: (k) => k.includes(".position."),
+  },
+  {
     id: "agents",
     title: "Multi-agent агенты (Phase 5)",
     match: (k) => k.includes(".agent."),
@@ -62,7 +67,21 @@ const GROUPS: { id: string; title: string; match: (key: string) => boolean }[] =
     title: "Создание договора",
     match: (k) => k.startsWith("contract_generation."),
   },
+  {
+    id: "counterparty",
+    title: "Проверка контрагента",
+    match: (k) => k.startsWith("counterparty_check."),
+  },
 ];
+
+const ADDENDUM_HEADER =
+  "---\nДополнения и уточнения пользователя (имеют приоритет над базовым промптом при противоречиях):";
+
+function mergePromptPreview(base: string, addendum: string): string {
+  const trimmed = addendum.trim();
+  if (!trimmed) return base;
+  return `${base.trimEnd()}\n\n${ADDENDUM_HEADER}\n${trimmed}`;
+}
 
 function PromptCard({
   prompt,
@@ -73,23 +92,31 @@ function PromptCard({
   token: string;
   onChanged: (updated: PromptItem) => void;
 }) {
-  const [value, setValue] = useState(prompt.content);
+  const [open, setOpen] = useState(false);
+  const [addendum, setAddendum] = useState(prompt.user_addendum);
   const [saving, setSaving] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => setValue(prompt.content), [prompt.content]);
+  useEffect(() => {
+    setAddendum(prompt.user_addendum);
+  }, [prompt.user_addendum]);
 
-  const dirty = value !== prompt.content;
+  const dirty = addendum !== prompt.user_addendum;
+  const preview = mergePromptPreview(prompt.default_content, addendum);
 
   const handleSave = async () => {
     setSaving(true);
     setError(null);
     try {
-      const updated = await promptApi.update(token, prompt.key, value);
+      const updated = await promptApi.update(token, prompt.key, addendum);
       onChanged(updated);
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Не удалось сохранить промпт");
+      if (e instanceof ApiError && e.status === 401) {
+        useAuthStore.getState().logout();
+        return;
+      }
+      setError(e instanceof ApiError ? e.message : "Не удалось сохранить дополнение");
     } finally {
       setSaving(false);
     }
@@ -101,8 +128,13 @@ function PromptCard({
     try {
       const updated = await promptApi.reset(token, prompt.key);
       onChanged(updated);
+      setOpen(false);
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Не удалось сбросить промпт");
+      if (e instanceof ApiError && e.status === 401) {
+        useAuthStore.getState().logout();
+        return;
+      }
+      setError(e instanceof ApiError ? e.message : "Не удалось сбросить дополнение");
     } finally {
       setResetting(false);
     }
@@ -111,49 +143,93 @@ function PromptCard({
   return (
     <Card>
       <CardHeader className="flex flex-row items-start justify-between gap-3">
-        <div>
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="min-w-0 flex-1 text-left"
+        >
           <div className="flex items-center gap-2">
-            <h3 className="font-semibold text-slate-900">{prompt.title}</h3>
+            <h3 className="truncate font-semibold text-slate-900">{prompt.title}</h3>
             {prompt.is_customized && (
               <span className="rounded-full bg-brand-100 px-2 py-0.5 text-xs font-medium text-brand-800">
-                Изменено
+                Есть дополнения
               </span>
             )}
+            <span className="text-xs text-slate-400">{open ? "Свернуть" : "Открыть"}</span>
           </div>
-          <p className="mt-1 text-sm text-slate-500">{prompt.description}</p>
-        </div>
+          <p className="mt-1 line-clamp-2 text-sm text-slate-500">{prompt.description}</p>
+        </button>
       </CardHeader>
-      <CardContent className="space-y-3">
-        <textarea
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          rows={prompt.key.endsWith(".system_base") ? 16 : 4}
-          className="w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-xs leading-relaxed focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20"
-        />
-
-        {error && <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
-
-        <div className="flex items-center justify-between">
-          <p className="text-xs text-slate-400">
-            {prompt.updated_at ? `Изменено: ${new Date(prompt.updated_at).toLocaleString("ru-RU")}` : "Значение по умолчанию"}
-          </p>
-          <div className="flex gap-2">
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={!prompt.is_customized || resetting}
-              onClick={handleReset}
-            >
-              {resetting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
-              <span className="ml-1.5">Сбросить</span>
-            </Button>
-            <Button size="sm" disabled={!dirty || saving} onClick={handleSave}>
-              {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-              <span className="ml-1.5">Сохранить</span>
-            </Button>
+      {open && (
+        <CardContent className="space-y-3">
+          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+            Базовый промпт встроен в систему и не редактируется. Ниже можно добавить свои уточнения — они
+            дополнят базу, а при противоречии будут иметь приоритет.
           </div>
-        </div>
-      </CardContent>
+
+          <details className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+            <summary className="cursor-pointer text-sm font-medium text-slate-800">
+              Базовый промпт (только просмотр)
+            </summary>
+            <pre className="mt-2 max-h-64 overflow-y-auto whitespace-pre-wrap text-xs text-slate-600">
+              {prompt.default_content}
+            </pre>
+          </details>
+
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-slate-800">
+              Дополнения пользователя
+            </label>
+            <textarea
+              value={addendum}
+              onChange={(e) => setAddendum(e.target.value)}
+              placeholder="Например: «Особое внимание — штрафные санкции и порядок приёмки. Неустойку считать завышенной, если превышает 0,1% в день.»"
+              rows={prompt.key.endsWith(".system_base") ? 8 : 5}
+              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm leading-relaxed focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20"
+            />
+          </div>
+
+          {(dirty || prompt.is_customized) && (
+            <details className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+              <summary className="cursor-pointer text-sm font-medium text-slate-800">
+                Итоговый промпт для ИИ (предпросмотр)
+              </summary>
+              <pre className="mt-2 max-h-64 overflow-y-auto whitespace-pre-wrap text-xs text-slate-600">
+                {preview}
+              </pre>
+            </details>
+          )}
+
+          {error && <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
+
+          <div className="flex items-center justify-between">
+            <p className="text-xs text-slate-400">
+              {prompt.updated_at
+                ? `Дополнения сохранены: ${new Date(prompt.updated_at).toLocaleString("ru-RU")}`
+                : "Только базовый промпт"}
+            </p>
+            <div className="flex gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={!prompt.is_customized || resetting}
+                onClick={handleReset}
+              >
+                {resetting ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <RotateCcw className="h-3.5 w-3.5" />
+                )}
+                <span className="ml-1.5">Сбросить</span>
+              </Button>
+              <Button size="sm" disabled={!dirty || saving} onClick={handleSave}>
+                {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                <span className="ml-1.5">Сохранить</span>
+              </Button>
+            </div>
+          </div>
+        </CardContent>
+      )}
     </Card>
   );
 }
@@ -168,16 +244,23 @@ function PromptsPageContent() {
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(() => {
+    setError(null);
     promptApi
       .list(token)
       .then(setPrompts)
-      .catch((e) => setError(e instanceof ApiError ? e.message : "Не удалось загрузить промпты"));
+      .catch((e) => {
+        if (e instanceof ApiError && e.status === 401) {
+          useAuthStore.getState().logout();
+          return;
+        }
+        setError(e instanceof ApiError ? e.message : "Не удалось загрузить промпты");
+      });
   }, [token]);
 
   useEffect(() => {
     if (!isAdmin) return;
     load();
-  }, [load]);
+  }, [load, isAdmin]);
 
   const handleChanged = (updated: PromptItem) => {
     setPrompts((prev) => prev?.map((p) => (p.key === updated.key ? updated : p)) ?? null);
@@ -194,8 +277,8 @@ function PromptsPageContent() {
           <h1 className="text-2xl font-bold text-slate-900">Управление промптами</h1>
         </div>
         <p className="text-sm text-slate-500">
-          Инструкции для ИИ-юриста в модуле «Проверка договора». Изменения применяются к новым проверкам сразу после
-          сохранения.
+          Базовые инструкции для ИИ встроены в систему. Здесь можно добавить дополнения — они применяются к новым
+          проверкам сразу после сохранения и имеют приоритет над базой при противоречиях.
         </p>
       </div>
 

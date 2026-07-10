@@ -1,16 +1,17 @@
 """Registry of editable prompts exposed via Prompt Management UI.
 
 Each entry defines a stable `key`, human-readable metadata, and the built-in
-default content. A `PromptOverride` row in the DB (same `key`) takes
-precedence when present; otherwise the default below is used. This keeps the
-set of editable prompts closed (no arbitrary keys) while allowing full-text
-edits from Settings → Управление промптами.
+base content (always used at runtime). Optional `PromptOverride` rows store
+user addendums only; at runtime base and addendum are merged, with the
+addendum taking priority on conflicts. This keeps the set of editable prompts
+closed (no arbitrary keys) while allowing safe supplements from Settings.
 """
 
 from dataclasses import dataclass
 
 SYSTEM_BASE_DEFAULT = """Ты — старший юрист с 20-летним опытом в отрасли: $industry_label.
 Компания заказчика: $company_name.
+$position_instruction
 $mode_instruction
 
 Отвечай ТОЛЬКО валидным JSON без markdown-обёртки.
@@ -61,6 +62,53 @@ INDUSTRY_TITLES = {
     "general": "Универсальное",
 }
 
+POSITION_DEFAULTS = {
+    # Construction: role-sensitive guidance (our side in contractor ↔ general contractor ↔ customer chain)
+    "construction.contractor": (
+        "Наша позиция: ПОДРЯДЧИК (исполнитель работ). "
+        "Проверь, чтобы договор не фиксировал цену/сроки «намертво» и допускал изменение при новых обстоятельствах; "
+        "неустойки — только от невыполненного объёма и с ограничением (например, ≤5% цены договора); "
+        "штрафы — конкретные и разумные (без неадекватных удержаний); "
+        "ответственность за сохранность материалов/оборудования после передачи — на заказчике либо чётко оговорены условия хранения."
+    ),
+    "construction.general_contractor": (
+        "Наша позиция: ГЕНПОДРЯДЧИК. "
+        "Проверь, чтобы обязательства генподрядчика были сформулированы без избыточной детализации и открытых рисков; "
+        "а требования к подрядчику/субподрядчику — чёткие (сроки, качество, отчётность, безопасность). "
+        "Смотри на перераспределение рисков, ответственность за субподряд, удержания и порядок приёмки."
+    ),
+    "construction.customer": (
+        "Наша позиция: ЗАКАЗЧИК. "
+        "Проверь, чтобы сроки и контроль качества были управляемыми, были инструменты воздействия при просрочке; "
+        "ответственность подрядчика достаточная, штрафы/пени соразмерные и исполнимые; "
+        "приёмка, гарантия, устранение недостатков и удержание обеспечивали интересы заказчика."
+    ),
+    "supply.supplier": (
+        "Наша позиция: ПОСТАВЩИК. "
+        "Проверь, чтобы условия оплаты и документооборота были исполнимыми (счёт/УПД/акты), "
+        "риски приёмки и отказа от товара были ограничены, а ответственность поставщика имела разумные пределы. "
+        "Смотри на переход риска, сроки оплаты, штрафы/пени и основания для удержаний."
+    ),
+    "supply.buyer": (
+        "Наша позиция: ПОКУПАТЕЛЬ. "
+        "Проверь, чтобы качество/комплектность и порядок приёмки защищали покупателя, "
+        "гарантия и сроки устранения недостатков были конкретными, "
+        "а оплата была привязана к факту поставки и корректным документам."
+    ),
+    "general.executor": (
+        "Наша позиция: ИСПОЛНИТЕЛЬ (оказание услуг). "
+        "Проверь, чтобы предмет и результат услуг были определены без неопределённых обязанностей, "
+        "сроки и объём допускали изменение по допсоглашению, "
+        "приёмка услуг и оплата были понятными, а ответственность имела ограничение."
+    ),
+    "general.customer": (
+        "Наша позиция: ЗАКАЗЧИК (оказание услуг). "
+        "Проверь, чтобы результат и KPI/сроки были измеримыми, "
+        "были инструменты контроля и требования к отчётности, "
+        "а оплата была увязана с приёмкой результата и качеством услуг."
+    ),
+}
+
 COMPARISON_SYSTEM_DEFAULT = """Ты — старший юрист, сравнивающий две редакции одного договора: базовую (эталон/наш шаблон/предыдущая версия) и новую (версия на согласовании, например от контрагента).
 Компания заказчика: $company_name.
 $user_comment_block
@@ -107,7 +155,7 @@ REGISTRY: list[PromptDef] = [
         title="Базовый системный промпт",
         description=(
             "Основная инструкция для ИИ-юриста. Доступные переменные: "
-            "$industry_label, $company_name, $mode_instruction. "
+            "$industry_label, $company_name, $position_instruction, $mode_instruction. "
             "JSON-схема ответа должна остаться без изменений."
         ),
         default_content=SYSTEM_BASE_DEFAULT,
@@ -121,6 +169,24 @@ REGISTRY: list[PromptDef] = [
             default_content=content,
         )
         for mode, content in MODE_DEFAULTS.items()
+    ],
+    *[
+        PromptDef(
+            key=f"contract_review.position.{pos_key}",
+            category="contract_review",
+            title=f"Позиция: {title}",
+            description="Роль/позиция нашей компании в договоре (влияет на акценты проверки).",
+            default_content=content,
+        )
+        for pos_key, title, content in [
+            ("construction.contractor", "Подрядчик", POSITION_DEFAULTS["construction.contractor"]),
+            ("construction.general_contractor", "Генподрядчик", POSITION_DEFAULTS["construction.general_contractor"]),
+            ("construction.customer", "Заказчик", POSITION_DEFAULTS["construction.customer"]),
+            ("supply.supplier", "Поставщик", POSITION_DEFAULTS["supply.supplier"]),
+            ("supply.buyer", "Покупатель", POSITION_DEFAULTS["supply.buyer"]),
+            ("general.executor", "Исполнитель (услуги)", POSITION_DEFAULTS["general.executor"]),
+            ("general.customer", "Заказчик (услуги)", POSITION_DEFAULTS["general.customer"]),
+        ]
     ],
     *[
         PromptDef(

@@ -564,3 +564,35 @@
 **Статус:** Завершено.
 
 **Следующий шаг:** Production hardening (Celery, OnlyOffice, Keycloak) или доработки по обратной связи пользователя.
+
+---
+
+## 2026-07-09 — UX промптов + роли в проверке договора (позиция)
+
+**Запрос:** Доработать «Управление промптами»: скрывать текст по умолчанию, сделать редактирование понятным юристу и защитить схему; добавить переключение специфики/роли (подрядчик vs генподрядчик и т.п.) для проверки договора.
+
+**Сделано:**
+- UI промптов: промпт по умолчанию скрыт; раскрывается кликом по карточке.
+- Для `contract_review.system_base`: “простой режим” — редактируется только человеческая часть, техническая схема ответа защищена и показана как read-only.
+- Добавлены промпты ролей `contract_review.position.*` (стройка: подрядчик / генподрядчик / заказчик) и подстановка в системный промпт через `$position_instruction`.
+- В `/contracts/review` добавлен выбор позиции; значение сохраняется в `document_tasks.review_position` (миграция `011_review_position`).
+- В `settings/prompts` добавлена группа «Позиции в договоре».
+- Расширены позиции: поставки (поставщик/покупатель) и услуги (исполнитель/заказчик).
+
+**Файлы:** `apps/web/src/app/settings/prompts/page.tsx`, `apps/web/src/app/contracts/review/page.tsx`, `services/prompt_engine/registry.py`, `services/prompt_engine/review_prompts.py`, `services/ai_orchestrator/reviewer.py`, `apps/api/schemas_review.py`, `apps/api/routers/reviews.py`, `packages/db/models.py`, `packages/db/migrations/versions/011_review_position.py`.
+
+**Статус:** Завершено.
+
+---
+
+## 2026-07-10 — Connection refused при входе
+
+**Запрос:** Не могу зайти в приложение — `ConnectionRefusedError: [Errno 61] Connection refused` (uvloop/create_connection).
+
+**Сделано:**
+- Причина: Docker Desktop был выключен → PostgreSQL/Redis на localhost:5432/6379 недоступны.
+- Запущен Docker Desktop, `docker compose up -d` — контейнеры `lexforge-postgres` и `lexforge-redis` healthy.
+- Проверено: `GET /health` → 200, логин `admin@lexforge.ru` успешен, `/login` → 200.
+
+**Статус:** Завершено.
+**Следующий шаг:** Открыть http://localhost:3000/login.

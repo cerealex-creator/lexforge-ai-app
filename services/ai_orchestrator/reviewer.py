@@ -103,8 +103,15 @@ async def _run_single_review(
     mode_key = f"contract_review.mode.{task.review_mode.value}"
     industry_key = f"contract_review.industry.{task.industry}"
     reference_key = "contract_review.reference_instruction"
+    position_key = (
+        f"contract_review.position.{task.industry}.{task.review_position}"
+        if task.review_position
+        else None
+    )
     prompts = await get_prompt_map(
-        db, ["contract_review.system_base", mode_key, industry_key, reference_key]
+        db,
+        ["contract_review.system_base", mode_key, industry_key, reference_key]
+        + ([position_key] if position_key else []),
     )
 
     system, user = build_review_prompt(
@@ -116,6 +123,7 @@ async def _run_single_review(
         system_base=prompts["contract_review.system_base"],
         mode_instruction=prompts[mode_key],
         industry_label=prompts[industry_key],
+        position_instruction=prompts[position_key] if position_key else "",
         reference_text=reference_text,
         reference_instruction=prompts[reference_key] if reference_text else None,
     )
@@ -132,8 +140,15 @@ async def _run_multi_agent_review(
 ) -> dict:
     industry_key = f"contract_review.industry.{task.industry}"
     reference_key = "contract_review.reference_instruction"
+    position_key = (
+        f"contract_review.position.{task.industry}.{task.review_position}"
+        if task.review_position
+        else None
+    )
     keys = ["contract_review.system_base", industry_key, reference_key]
     keys += [spec[1] for spec in AGENT_SPECS]
+    if position_key:
+        keys.append(position_key)
     prompts = await get_prompt_map(db, keys)
 
     async def run_agent(label: str, agent_key: str) -> dict:
@@ -146,6 +161,7 @@ async def _run_multi_agent_review(
             system_base=prompts["contract_review.system_base"],
             mode_instruction=prompts[agent_key],
             industry_label=prompts[industry_key],
+            position_instruction=prompts[position_key] if position_key else "",
             reference_text=reference_text,
             reference_instruction=prompts[reference_key] if reference_text else None,
         )

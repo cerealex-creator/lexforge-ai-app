@@ -151,6 +151,7 @@ export function RecentActivity() {
                           {KIND_LABELS[item.kind] ?? item.kind} ·{" "}
                           {new Date(item.created_at).toLocaleString("ru-RU")}
                           {item.meta.multi_agent ? " · 3 агента" : ""}
+                          {typeof item.meta.review_position === "string" ? ` · ${item.meta.review_position}` : ""}
                         </p>
                       </div>
                     </div>

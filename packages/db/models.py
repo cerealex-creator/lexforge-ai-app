@@ -122,6 +122,7 @@ class DocumentTask(Base):
     status: Mapped[TaskStatus] = mapped_column(Enum(TaskStatus, name="task_status"), default=TaskStatus.pending)
     industry: Mapped[str] = mapped_column(String(32), default="construction")
     multi_agent: Mapped[bool] = mapped_column(Boolean, default=False)
+    review_position: Mapped[str | None] = mapped_column(String(32), nullable=True)
     user_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     reference_document_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("reference_documents.id", ondelete="SET NULL"), nullable=True
@@ -209,9 +210,10 @@ class ReferenceDocument(Base):
 
 
 class PromptOverride(Base):
-    """User-edited override for a prompt registered in services.prompt_engine.registry.
+    """User addendum for a prompt registered in services.prompt_engine.registry.
 
-    Absence of a row means the built-in default from the registry is used.
+    `content` stores only the user's supplemental instructions, not the full prompt.
+    Absence of a row means the built-in base from the registry is used as-is.
     """
 
     __tablename__ = "prompt_overrides"

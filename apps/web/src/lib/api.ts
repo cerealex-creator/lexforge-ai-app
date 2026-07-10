@@ -150,6 +150,7 @@ export interface ReviewListItem {
   review_mode: string;
   industry: string;
   multi_agent?: boolean;
+  review_position?: string | null;
   risk_score?: number | null;
   created_at: string;
   completed_at?: string | null;
@@ -162,6 +163,7 @@ export interface ReviewTask {
   review_mode: string;
   industry: string;
   multi_agent?: boolean;
+  review_position?: string | null;
   user_comment?: string | null;
   reference_document_id?: string | null;
   error_message?: string | null;
@@ -619,6 +621,7 @@ export const reviewApi = {
       review_mode: string;
       industry: string;
       multi_agent?: boolean;
+      review_position?: string;
       user_comment?: string;
       reference_document_id?: string;
     },
@@ -763,8 +766,9 @@ export interface PromptItem {
   category: string;
   title: string;
   description: string;
-  content: string;
   default_content: string;
+  user_addendum: string;
+  content: string;
   is_customized: boolean;
   updated_at?: string | null;
 }

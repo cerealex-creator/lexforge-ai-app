@@ -34,6 +34,7 @@ class ReviewCreateRequest(BaseModel):
     review_mode: Literal["full", "errors", "risks"] = "full"
     industry: Literal["construction", "production", "supply", "general"] = "construction"
     multi_agent: bool = False
+    review_position: Optional[str] = None
     user_comment: Optional[str] = None
     reference_document_id: Optional[uuid.UUID] = None
 
@@ -62,6 +63,7 @@ class ReviewTaskOut(BaseModel):
     review_mode: str
     industry: str
     multi_agent: bool = False
+    review_position: Optional[str] = None
     user_comment: Optional[str] = None
     reference_document_id: Optional[uuid.UUID] = None
     error_message: Optional[str] = None
@@ -80,6 +82,7 @@ class ReviewListItemOut(BaseModel):
     review_mode: str
     industry: str
     multi_agent: bool = False
+    review_position: Optional[str] = None
     risk_score: Optional[int] = None
     created_at: datetime
     completed_at: Optional[datetime] = None

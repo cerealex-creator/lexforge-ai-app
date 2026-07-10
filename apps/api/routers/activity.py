@@ -93,6 +93,7 @@ async def list_activity(
                     meta={
                         "risk_score": t.result.risk_score if t.result else None,
                         "multi_agent": t.multi_agent,
+                        "review_position": t.review_position,
                     },
                 )
             )

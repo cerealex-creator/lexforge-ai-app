@@ -19,6 +19,22 @@ const MODES = [
   { id: "risks", label: "Угрозы и риски", desc: "Юридические риски и невыгодные условия" },
 ] as const;
 
+const POSITION_OPTIONS: Record<string, { id: string; label: string; desc: string }[]> = {
+  construction: [
+    { id: "contractor", label: "Мы — подрядчик", desc: "Защита интересов исполнителя работ" },
+    { id: "general_contractor", label: "Мы — генподрядчик", desc: "Контроль субподрядчиков и управляемые риски" },
+    { id: "customer", label: "Мы — заказчик", desc: "Контроль сроков/качества и ответственность подрядчика" },
+  ],
+  supply: [
+    { id: "supplier", label: "Мы — поставщик", desc: "Ограничение рисков приёмки/отказа, исполнимость оплаты" },
+    { id: "buyer", label: "Мы — покупатель", desc: "Качество, гарантия, приёмка и оплата по результату" },
+  ],
+  general: [
+    { id: "executor", label: "Мы — исполнитель", desc: "Чёткий предмет/результат, приёмка и ограничение ответственности" },
+    { id: "customer", label: "Мы — заказчик", desc: "KPI/результат, контроль, оплата после приёмки" },
+  ],
+};
+
 function riskColor(score: number) {
   if (score >= 9) return "bg-red-600 text-white";
   if (score >= 7) return "bg-orange-500 text-white";
@@ -45,6 +61,7 @@ function ReviewPageContent() {
   const [archiveDocs, setArchiveDocs] = useState<DocumentListItem[]>([]);
   const [mode, setMode] = useState<string>("full");
   const [multiAgent, setMultiAgent] = useState(false);
+  const [reviewPosition, setReviewPosition] = useState<string>("contractor");
   const [comment, setComment] = useState("");
   const [referenceDocs, setReferenceDocs] = useState<ReferenceDocumentItem[]>([]);
   const [referenceDocId, setReferenceDocId] = useState<string>("");
@@ -93,6 +110,15 @@ function ReviewPageContent() {
 
   useEffect(() => () => stopPoll(), [stopPoll]);
 
+  // When industry changes, reset position to first valid option for that industry.
+  useEffect(() => {
+    const opts = POSITION_OPTIONS[industry];
+    if (!opts || opts.length === 0) return;
+    if (!opts.some((o) => o.id === reviewPosition)) {
+      setReviewPosition(opts[0].id);
+    }
+  }, [industry, reviewPosition]);
+
   useEffect(() => {
     if (!company) return;
     referenceApi
@@ -127,6 +153,7 @@ function ReviewPageContent() {
         company_id: company.id,
         review_mode: mode,
         industry,
+        review_position: POSITION_OPTIONS[industry]?.length ? reviewPosition : undefined,
         multi_agent: multiAgent,
         user_comment: comment || undefined,
         reference_document_id: referenceDocId || undefined,
@@ -234,9 +261,38 @@ function ReviewPageContent() {
             </CardContent>
           </Card>
 
+          {POSITION_OPTIONS[industry]?.length > 0 && (
+            <Card>
+              <CardHeader>
+                <h2 className="font-semibold">3. Наша позиция в договоре</h2>
+                <p className="mt-1 text-xs text-slate-500">
+                  От позиции зависит, какие условия считаются рискованными и какие правки предлагает ИИ
+                </p>
+              </CardHeader>
+              <CardContent className="grid gap-2 sm:grid-cols-3">
+                {POSITION_OPTIONS[industry].map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => setReviewPosition(p.id)}
+                    className={cn(
+                      "rounded-lg border p-3 text-left transition",
+                      reviewPosition === p.id
+                        ? "border-brand-600 bg-brand-50 ring-1 ring-brand-600"
+                        : "border-slate-200 hover:border-slate-300",
+                    )}
+                  >
+                    <p className="font-medium text-slate-900">{p.label}</p>
+                    <p className="mt-1 text-xs text-slate-500">{p.desc}</p>
+                  </button>
+                ))}
+              </CardContent>
+            </Card>
+          )}
+
           <Card>
             <CardHeader>
-              <h2 className="font-semibold">3. Глубокая проверка (опционально)</h2>
+              <h2 className="font-semibold">4. Глубокая проверка (опционально)</h2>
             </CardHeader>
             <CardContent>
               <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-slate-200 p-3 hover:bg-slate-50">
@@ -259,7 +315,7 @@ function ReviewPageContent() {
 
           <Card>
             <CardHeader>
-              <h2 className="font-semibold">4. Комментарий юриста (опционально)</h2>
+              <h2 className="font-semibold">5. Комментарий юриста (опционально)</h2>
             </CardHeader>
             <CardContent>
               <textarea
@@ -275,7 +331,7 @@ function ReviewPageContent() {
           {referenceDocs.length > 0 && (
             <Card>
               <CardHeader>
-                <h2 className="font-semibold">5. Сравнить с эталоном компании (опционально)</h2>
+                <h2 className="font-semibold">6. Сравнить с эталоном компании (опционально)</h2>
                 <p className="mt-1 text-xs text-slate-500">
                   ИИ дополнительно сверит договор с выбранным типовым шаблоном или чек-листом
                 </p>

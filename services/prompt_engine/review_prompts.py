@@ -19,6 +19,7 @@ def build_review_prompt(
     system_base: str,
     mode_instruction: str,
     industry_label: str,
+    position_instruction: str = "",
     reference_text: str | None = None,
     reference_instruction: str | None = None,
 ) -> tuple[str, str]:
@@ -31,6 +32,7 @@ def build_review_prompt(
         industry_label=industry_label,
         company_name=company_name,
         mode_instruction=mode_instruction,
+        position_instruction=(position_instruction or "").strip(),
     )
 
     user_parts = [f"Договор для проверки:{truncate_note}\n\n{text}"]
