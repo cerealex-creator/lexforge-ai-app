@@ -140,6 +140,10 @@ export interface ReviewResult {
   findings: Finding[];
   multi_agent?: boolean;
   agents?: { agent: string; risk_score: number; findings_count: number }[];
+  refined_from?: string | null;
+  refine_scope?: string | null;
+  accepted_count?: number | null;
+  new_count?: number | null;
 }
 
 export interface ReviewListItem {
@@ -170,6 +174,8 @@ export interface ReviewTask {
   created_at: string;
   completed_at?: string | null;
   result?: ReviewResult | null;
+  parent_task_id?: string | null;
+  refine_scope?: string | null;
 }
 
 async function uploadFile<T>(
@@ -464,15 +470,30 @@ export interface CounterpartyCheck {
   status: "pending" | "processing" | "completed" | "failed";
   error_message?: string | null;
   result?: Record<string, unknown> | null;
+  project_id?: string | null;
   created_at: string;
   completed_at?: string | null;
 }
 
 export const counterpartyApi = {
-  create: (token: string, companyId: string, inn: string, context?: string) =>
+  create: (
+    token: string,
+    companyId: string,
+    inn: string,
+    context?: string,
+    projectId?: string,
+  ) =>
     request<CounterpartyCheck>(
       "/api/v1/counterparty/check",
-      { method: "POST", body: JSON.stringify({ company_id: companyId, inn, context }) },
+      {
+        method: "POST",
+        body: JSON.stringify({
+          company_id: companyId,
+          inn,
+          context,
+          project_id: projectId,
+        }),
+      },
       token,
     ),
 
@@ -624,6 +645,12 @@ export const reviewApi = {
       review_position?: string;
       user_comment?: string;
       reference_document_id?: string;
+      parent_task_id?: string;
+      refine_scope?: "focus_only" | "supplement";
+      accepted_findings?: Finding[];
+      finding_feedback?: { finding: Finding; note: string }[];
+      lawyer_notes?: string;
+      project_id?: string;
     },
   ) =>
     request<ReviewTask>("/api/v1/reviews", {
@@ -643,6 +670,25 @@ export const reviewApi = {
   exportReview: async (token: string, taskId: string, companyId: string): Promise<Blob> => {
     const res = await fetch(
       `${API_URL}/api/v1/reviews/${taskId}/export?company_id=${companyId}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new ApiError(res.status, formatHttpError(res.status, res.statusText, data.detail));
+    }
+    return res.blob();
+  },
+
+  exportAnnotatedReview: async (
+    token: string,
+    taskId: string,
+    companyId: string,
+    commentAuthor?: string,
+  ): Promise<Blob> => {
+    const params = new URLSearchParams({ company_id: companyId });
+    if (commentAuthor?.trim()) params.set("comment_author", commentAuthor.trim());
+    const res = await fetch(
+      `${API_URL}/api/v1/reviews/${taskId}/export-annotated?${params}`,
       { headers: { Authorization: `Bearer ${token}` } },
     );
     if (!res.ok) {
@@ -729,6 +775,7 @@ export const comparisonApi = {
       revised_document_id: string;
       company_id: string;
       user_comment?: string;
+      project_id?: string;
     },
   ) =>
     request<ComparisonTask>("/api/v1/comparisons", {
@@ -789,4 +836,178 @@ export const promptApi = {
       { method: "POST" },
       token,
     ),
+};
+
+export type ProjectKind = "contract" | "litigation" | "consulting";
+export type ProjectStage =
+  | "preliminary"
+  | "first_deal"
+  | "repeat"
+  | "addendum"
+  | "renewal"
+  | "dispute"
+  | "other";
+export type ProjectDocRole = "ours" | "theirs" | "joint" | "evidence" | "other";
+
+export interface ProjectDocumentItem {
+  id: string;
+  document_id: string;
+  document_title: string;
+  role: ProjectDocRole;
+  edition: number;
+  label?: string | null;
+  added_at: string;
+}
+
+export interface ProjectListItem {
+  id: string;
+  title: string;
+  kind: ProjectKind;
+  status: "active" | "archived";
+  counterparty_name?: string | null;
+  counterparty_inn?: string | null;
+  stage?: ProjectStage | null;
+  document_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Project {
+  id: string;
+  company_id: string;
+  title: string;
+  kind: ProjectKind;
+  status: "active" | "archived";
+  counterparty_name?: string | null;
+  counterparty_inn?: string | null;
+  industry?: string | null;
+  our_position?: string | null;
+  stage?: ProjectStage | null;
+  specificity?: string | null;
+  brief?: string | null;
+  judicial_profile?: Record<string, unknown> | null;
+  memory_json?: Record<string, unknown> | null;
+  documents: ProjectDocumentItem[];
+  created_at: string;
+  updated_at: string;
+}
+
+export const projectApi = {
+  list: (token: string, companyId: string, status = "active") => {
+    const params = new URLSearchParams({ company_id: companyId, status });
+    return request<ProjectListItem[]>(`/api/v1/projects?${params}`, {}, token);
+  },
+
+  get: (token: string, projectId: string, companyId: string) =>
+    request<Project>(`/api/v1/projects/${projectId}?company_id=${companyId}`, {}, token),
+
+  create: (
+    token: string,
+    data: {
+      company_id: string;
+      title: string;
+      kind?: ProjectKind;
+      counterparty_name?: string;
+      counterparty_inn?: string;
+      industry?: string;
+      our_position?: string;
+      stage?: ProjectStage;
+      specificity?: string;
+      brief?: string;
+    },
+  ) =>
+    request<Project>("/api/v1/projects", { method: "POST", body: JSON.stringify(data) }, token),
+
+  fromDocument: (
+    token: string,
+    data: {
+      company_id: string;
+      document_id: string;
+      title?: string;
+      kind?: ProjectKind;
+      role?: ProjectDocRole;
+      stage?: ProjectStage;
+      specificity?: string;
+      brief?: string;
+      counterparty_name?: string;
+      counterparty_inn?: string;
+      industry?: string;
+      our_position?: string;
+    },
+  ) =>
+    request<Project>(
+      "/api/v1/projects/from-document",
+      { method: "POST", body: JSON.stringify(data) },
+      token,
+    ),
+
+  update: (
+    token: string,
+    projectId: string,
+    companyId: string,
+    data: Record<string, unknown>,
+  ) => {
+    const params = new URLSearchParams({ company_id: companyId });
+    return request<Project>(
+      `/api/v1/projects/${projectId}?${params}`,
+      { method: "PATCH", body: JSON.stringify(data) },
+      token,
+    );
+  },
+
+  updateJudicialProfile: (
+    token: string,
+    projectId: string,
+    companyId: string,
+    data: Record<string, unknown>,
+  ) => {
+    const params = new URLSearchParams({ company_id: companyId });
+    return request<Project>(
+      `/api/v1/projects/${projectId}/judicial-profile?${params}`,
+      { method: "PUT", body: JSON.stringify(data) },
+      token,
+    );
+  },
+
+  attachDocument: (
+    token: string,
+    projectId: string,
+    companyId: string,
+    data: { document_id: string; role?: ProjectDocRole; edition?: number; label?: string },
+  ) => {
+    const params = new URLSearchParams({ company_id: companyId });
+    return request<Project>(
+      `/api/v1/projects/${projectId}/documents?${params}`,
+      { method: "POST", body: JSON.stringify(data) },
+      token,
+    );
+  },
+
+  uploadDocument: (
+    token: string,
+    projectId: string,
+    companyId: string,
+    file: File,
+    role: ProjectDocRole = "ours",
+    label?: string,
+  ) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("role", role);
+    if (label) fd.append("label", label);
+    return uploadFile<Project>(
+      `/api/v1/projects/${projectId}/documents/upload?company_id=${companyId}`,
+      fd,
+      token,
+    );
+  },
+
+  listReviews: (token: string, projectId: string, companyId: string) => {
+    const params = new URLSearchParams({ company_id: companyId });
+    return request<{ id: string; document_id: string; status: string; created_at: string }[]>(
+      `/api/v1/projects/${projectId}/reviews?${params}`,
+      {},
+      token,
+    );
+  },
 };

@@ -1,9 +1,8 @@
 "use client";
 
 import { AuthGuard } from "@/components/auth-guard";
-import { AppShell, AuxiliaryLinks, LegalWorkGrid } from "@/components/app-shell";
+import { AppShell, LegalWorkGrid } from "@/components/app-shell";
 import { IndustrySelector } from "@/components/industry-selector";
-import { RecentActivity } from "@/components/recent-activity";
 import { TaskNotifications } from "@/components/task-notifications";
 import { useActiveCompany } from "@/lib/store";
 import { industries } from "@/lib/navigation";
@@ -23,7 +22,10 @@ function DashboardContent() {
             {company.name}
             {company.inn && <> · ИНН {company.inn}</>}
             {industryLabel && (
-              <> · <span className="text-slate-600">{industryLabel}</span></>
+              <>
+                {" "}
+                · <span className="text-slate-600">{industryLabel}</span>
+              </>
             )}
           </p>
         )}
@@ -34,9 +36,7 @@ function DashboardContent() {
       </div>
 
       <LegalWorkGrid />
-      <AuxiliaryLinks />
       <TaskNotifications />
-      <RecentActivity />
     </AppShell>
   );
 }

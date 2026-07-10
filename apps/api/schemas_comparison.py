@@ -10,6 +10,7 @@ class ComparisonCreateRequest(BaseModel):
     revised_document_id: uuid.UUID
     company_id: uuid.UUID
     user_comment: Optional[str] = None
+    project_id: Optional[uuid.UUID] = None
 
 
 class ComparisonChangeOut(BaseModel):

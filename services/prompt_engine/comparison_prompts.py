@@ -10,6 +10,7 @@ def build_comparison_prompt(
     diff_text: str,
     truncated: bool,
     system_base: str,
+    project_context: str | None = None,
 ) -> tuple[str, str]:
     comment_block = ""
     if user_comment and user_comment.strip():
@@ -21,6 +22,10 @@ def build_comparison_prompt(
     )
 
     truncate_note = "\n[Список изменений обрезан — показаны первые найденные различия]" if truncated else ""
-    user = f"Найденные различия между редакциями договора:{truncate_note}\n\n{diff_text}"
+    parts: list[str] = []
+    if project_context and project_context.strip():
+        parts.append(project_context.strip() + "\n\n---\n")
+    parts.append(f"Найденные различия между редакциями договора:{truncate_note}\n\n{diff_text}")
+    user = "\n".join(parts)
 
     return system, user

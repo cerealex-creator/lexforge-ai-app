@@ -54,6 +54,84 @@ class UserCompanyRole(Base):
     company: Mapped["Company"] = relationship(back_populates="user_roles")
 
 
+class ProjectKind(str, enum.Enum):
+    contract = "contract"
+    litigation = "litigation"
+    consulting = "consulting"
+
+
+class ProjectStatus(str, enum.Enum):
+    active = "active"
+    archived = "archived"
+
+
+class ProjectStage(str, enum.Enum):
+    preliminary = "preliminary"
+    first_deal = "first_deal"
+    repeat = "repeat"
+    addendum = "addendum"
+    renewal = "renewal"
+    dispute = "dispute"
+    other = "other"
+
+
+class ProjectDocumentRole(str, enum.Enum):
+    ours = "ours"
+    theirs = "theirs"
+    joint = "joint"
+    evidence = "evidence"
+    other = "other"
+
+
+class Project(Base):
+    """Matter / deal bubble: shared context for documents and AI tasks."""
+
+    __tablename__ = "projects"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    company_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("companies.id", ondelete="CASCADE"))
+    title: Mapped[str] = mapped_column(String(512), nullable=False)
+    kind: Mapped[ProjectKind] = mapped_column(Enum(ProjectKind, name="project_kind"), default=ProjectKind.contract)
+    status: Mapped[ProjectStatus] = mapped_column(
+        Enum(ProjectStatus, name="project_status"), default=ProjectStatus.active
+    )
+    counterparty_name: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    counterparty_inn: Mapped[str | None] = mapped_column(String(12), nullable=True)
+    industry: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    our_position: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    stage: Mapped[ProjectStage | None] = mapped_column(Enum(ProjectStage, name="project_stage"), nullable=True)
+    specificity: Mapped[str | None] = mapped_column(Text, nullable=True)
+    brief: Mapped[str | None] = mapped_column(Text, nullable=True)
+    judicial_profile: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    memory_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    documents: Mapped[list["ProjectDocument"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
+
+
+class ProjectDocument(Base):
+    __tablename__ = "project_documents"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"))
+    document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"))
+    role: Mapped[ProjectDocumentRole] = mapped_column(
+        Enum(ProjectDocumentRole, name="project_document_role"), default=ProjectDocumentRole.ours
+    )
+    edition: Mapped[int] = mapped_column(default=1)
+    label: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    project: Mapped["Project"] = relationship(back_populates="documents")
+    document: Mapped["Document"] = relationship()
+
+
 class TaskType(str, enum.Enum):
     contract_review = "contract_review"
 
@@ -124,6 +202,10 @@ class DocumentTask(Base):
     multi_agent: Mapped[bool] = mapped_column(Boolean, default=False)
     review_position: Mapped[str | None] = mapped_column(String(32), nullable=True)
     user_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    review_context: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    project_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True
+    )
     reference_document_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("reference_documents.id", ondelete="SET NULL"), nullable=True
     )
@@ -158,6 +240,9 @@ class ComparisonTask(Base):
     revised_document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"))
     status: Mapped[TaskStatus] = mapped_column(Enum(TaskStatus, name="task_status"), default=TaskStatus.pending)
     user_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    project_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True
+    )
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -251,6 +336,9 @@ class CounterpartyCheck(Base):
     status: Mapped[TaskStatus] = mapped_column(Enum(TaskStatus, name="task_status"), default=TaskStatus.pending)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     result_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    project_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True
+    )
     created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -277,6 +365,9 @@ class LegalWorkItem(Base):
     result_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     document_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL"), nullable=True
+    )
+    project_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True
     )
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))

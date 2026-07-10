@@ -12,11 +12,14 @@ from packages.db.models import (
     ComparisonResult,
     ComparisonTask,
     DocumentVersion,
+    Project,
     TaskStatus,
 )
 from services.ai_orchestrator.llm_client import chat_json
 from services.document_processor.diff_engine import compute_diff, render_diff_for_prompt
 from services.prompt_engine.comparison_prompts import build_comparison_prompt
+from services.prompt_engine.project_context import format_project_context
+from services.prompt_engine.project_memory import update_memory_from_comparison
 from services.prompt_engine.prompt_service import get_prompt_map
 
 PROMPT_KEY = "version_comparison.system_base"
@@ -65,12 +68,26 @@ async def run_version_comparison(task_id: uuid.UUID) -> None:
                 raise ValueError("Не настроен ROUTERAI_API_KEY или OPENAI_API_KEY в .env")
 
             prompts = await get_prompt_map(db, [PROMPT_KEY])
+            project_ctx = ""
+            project = None
+            if task.project_id:
+                project = await db.get(Project, task.project_id)
+                if project:
+                    # Redline mode when project has prior memory or any brief/stage
+                    for_redline = bool(
+                        project.memory_json
+                        or project.brief
+                        or project.specificity
+                        or project.stage
+                    )
+                    project_ctx = format_project_context(project, for_redline=for_redline)
             system, user = build_comparison_prompt(
                 company_name=company.name if company else "Компания",
                 user_comment=task.user_comment,
                 diff_text=diff_text,
                 truncated=truncated,
                 system_base=prompts[PROMPT_KEY],
+                project_context=project_ctx,
             )
 
             result_data = await chat_json(system, user)
@@ -79,6 +96,15 @@ async def run_version_comparison(task_id: uuid.UUID) -> None:
             risk_delta = max(-5, min(5, risk_delta))
 
             db.add(ComparisonResult(task_id=task.id, risk_delta=risk_delta, result_json=result_data))
+            if project:
+                update_memory_from_comparison(
+                    project,
+                    changes=result_data.get("changes") or [],
+                    summary=result_data.get("summary"),
+                    risk_delta=risk_delta,
+                    task_id=str(task.id),
+                )
+                project.updated_at = datetime.now(timezone.utc)
             task.status = TaskStatus.completed
             task.completed_at = datetime.now(timezone.utc)
             task.error_message = None

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
+import { useSearchParams } from "next/navigation";
 import { AuthGuard } from "@/components/auth-guard";
 import { AppShell } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
@@ -43,6 +44,10 @@ function riskDeltaColor(delta: number) {
 function ComparePageContent() {
   const token = useAuthStore((s) => s.token)!;
   const company = useActiveCompany();
+  const searchParams = useSearchParams();
+  const projectIdFromUrl = searchParams.get("project_id");
+  const baseIdFromUrl = searchParams.get("base_id");
+  const revisedIdFromUrl = searchParams.get("revised_id");
 
   const [basePick, setBasePick] = useState<DocumentPick | null>(null);
   const [revisedPick, setRevisedPick] = useState<DocumentPick | null>(null);
@@ -97,8 +102,21 @@ function ComparePageContent() {
 
   useEffect(() => {
     if (!company) return;
-    documentApi.list(token, company.id).then(setArchiveDocs).catch(() => setArchiveDocs([]));
-  }, [token, company]);
+    documentApi
+      .list(token, company.id)
+      .then((docs) => {
+        setArchiveDocs(docs);
+        if (baseIdFromUrl) {
+          const found = docs.find((d) => d.id === baseIdFromUrl);
+          if (found) setBasePick({ source: "archive", documentId: found.id, title: found.title });
+        }
+        if (revisedIdFromUrl) {
+          const found = docs.find((d) => d.id === revisedIdFromUrl);
+          if (found) setRevisedPick({ source: "archive", documentId: found.id, title: found.title });
+        }
+      })
+      .catch(() => setArchiveDocs([]));
+  }, [token, company, baseIdFromUrl, revisedIdFromUrl]);
 
   const resolveDocumentId = async (pick: DocumentPick): Promise<string> => {
     if (pick.source === "archive") return pick.documentId;
@@ -128,6 +146,7 @@ function ComparePageContent() {
         revised_document_id: revisedDocId,
         company_id: company.id,
         user_comment: comment || undefined,
+        project_id: projectIdFromUrl || undefined,
       });
       setTask(comparisonTask);
       pollTask(comparisonTask.id);

@@ -32,6 +32,7 @@ def _to_out(x: CounterpartyCheck) -> CounterpartyCheckOut:
         status=x.status.value,
         error_message=x.error_message,
         result=(x.result_json or None),
+        project_id=str(x.project_id) if x.project_id else None,
         created_at=x.created_at.isoformat(),
         completed_at=x.completed_at.isoformat() if x.completed_at else None,
     )
@@ -46,9 +47,17 @@ async def create_counterparty_check(
 ):
     await _verify_company_access(db, user.id, body.company_id)
 
+    if body.project_id:
+        from packages.db.models import Project
+
+        project = await db.get(Project, body.project_id)
+        if not project or project.company_id != body.company_id:
+            raise HTTPException(status_code=404, detail="Проект не найден")
+
     check = CounterpartyCheck(
         company_id=body.company_id,
         inn=body.inn,
+        project_id=body.project_id,
         created_by=user.id,
         result_json={"context": body.context} if body.context else None,
     )

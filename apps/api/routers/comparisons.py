@@ -83,11 +83,19 @@ async def create_comparison(
     if not revised_doc or revised_doc.company_id != body.company_id:
         raise HTTPException(status_code=404, detail="Документ новой редакции не найден")
 
+    if body.project_id:
+        from packages.db.models import Project
+
+        project = await db.get(Project, body.project_id)
+        if not project or project.company_id != body.company_id:
+            raise HTTPException(status_code=404, detail="Проект не найден")
+
     task = ComparisonTask(
         company_id=body.company_id,
         base_document_id=body.base_document_id,
         revised_document_id=body.revised_document_id,
         user_comment=body.user_comment,
+        project_id=body.project_id,
         status=TaskStatus.pending,
         created_by=user.id,
     )

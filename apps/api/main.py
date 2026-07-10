@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from apps.api.config import settings
-from apps.api.routers import activity, auth, companies, comparisons, consulting, contracts, counterparty, documents, litigation, prompts, reference_documents, reviews
+from apps.api.routers import activity, auth, companies, comparisons, consulting, contracts, counterparty, documents, litigation, prompts, projects, reference_documents, reviews
 
 app = FastAPI(
     title="LexForge AI API",
@@ -28,6 +28,7 @@ app.include_router(auth.router, prefix="/api/v1")
 app.include_router(activity.router, prefix="/api/v1")
 app.include_router(companies.router, prefix="/api/v1")
 app.include_router(documents.router, prefix="/api/v1")
+app.include_router(projects.router, prefix="/api/v1")
 app.include_router(reviews.router, prefix="/api/v1")
 app.include_router(contracts.router, prefix="/api/v1")
 app.include_router(counterparty.router, prefix="/api/v1")
@@ -59,6 +60,7 @@ async def health():
             "litigation": True,
             "activity": True,
             "multi_agent_review": True,
+            "projects": True,
         },
     }
 

@@ -2,51 +2,20 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import {
-  Scale,
-  LogOut,
-  Settings,
-  ChevronRight,
-  Clock,
-  ShieldCheck,
-} from "lucide-react";
+import { Scale, LogOut, Settings, FolderKanban, Zap } from "lucide-react";
 import { CompanySwitcher } from "@/components/company-switcher";
+import { InfoTip } from "@/components/info-tip";
+import { SidebarProjects } from "@/components/sidebar-projects";
+import { SidebarRecentTasks } from "@/components/sidebar-recent-tasks";
 import { Button } from "@/components/ui/button";
 import { useAuthStore } from "@/lib/store";
 import {
-  legalWorkSections,
   auxiliaryTools,
-  contractEmbeddedTools,
+  legalWorkSections,
+  sectionVisual,
   type NavSection,
 } from "@/lib/navigation";
 import { cn } from "@/lib/utils";
-
-const sectionStyles: Record<
-  NavSection["color"],
-  { border: string; badge: string; dot: string; sectionBg: string; cardHover: string }
-> = {
-  rose: {
-    border: "border-rose-200",
-    badge: "bg-rose-100 text-rose-800",
-    dot: "bg-rose-500",
-    sectionBg: "bg-rose-50/60",
-    cardHover: "hover:bg-rose-50/40",
-  },
-  amber: {
-    border: "border-amber-200",
-    badge: "bg-amber-100 text-amber-800",
-    dot: "bg-amber-500",
-    sectionBg: "bg-amber-50/60",
-    cardHover: "hover:bg-amber-50/40",
-  },
-  emerald: {
-    border: "border-emerald-200",
-    badge: "bg-emerald-100 text-emerald-800",
-    dot: "bg-emerald-500",
-    sectionBg: "bg-emerald-50/60",
-    cardHover: "hover:bg-emerald-50/40",
-  },
-};
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -96,40 +65,45 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </header>
 
       <div className="mx-auto flex max-w-7xl gap-6 px-4 py-6">
-        {/* Боковое меню — только юридическая работа */}
-        <aside className="hidden w-56 shrink-0 lg:block">
-          <nav className="sticky top-6 space-y-6">
-            {legalWorkSections.map((section) => {
-              const style = sectionStyles[section.color];
-              return (
-                <div key={section.id}>
-                  <div className="mb-2 flex items-center gap-2">
-                    <span className={cn("h-2 w-2 rounded-full", style.dot)} />
-                    <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                      {section.title}
-                    </h2>
-                  </div>
-                  <ul className="space-y-1">
-                    {section.items.map((item) => (
-                      <li key={item.id}>
-                        <Link
-                          href={item.enabled ? item.href : "/dashboard"}
-                          className={cn(
-                            "block rounded-lg px-3 py-2 text-sm transition",
-                            pathname === item.href
-                              ? "bg-brand-50 font-medium text-brand-800"
-                              : "text-slate-600 hover:bg-white hover:text-slate-900",
-                            !item.enabled && "opacity-60",
-                          )}
-                        >
-                          {item.title}
-                        </Link>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              );
-            })}
+        <aside className="hidden w-64 shrink-0 lg:block">
+          <nav className="sticky top-6 max-h-[calc(100vh-5rem)] space-y-5 overflow-y-auto pb-4 pr-1">
+            <div className="space-y-3">
+              {legalWorkSections.map((section) => (
+                <SidebarWorkPanel key={section.id} section={section} pathname={pathname} />
+              ))}
+            </div>
+
+            <div className="border-t border-slate-200 pt-4">
+              <SidebarProjects />
+            </div>
+
+            <div className="border-t border-slate-200 pt-4">
+              <SidebarRecentTasks />
+            </div>
+
+            <div className="border-t border-slate-200 pt-4">
+              <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Настройки и сервисы
+              </h2>
+              <ul className="space-y-0.5">
+                {auxiliaryTools.map((tool) => (
+                  <li key={tool.id}>
+                    <Link
+                      href={tool.enabled ? tool.href : "/settings"}
+                      className={cn(
+                        "block rounded-lg px-2 py-1.5 text-sm transition",
+                        pathname === tool.href || pathname.startsWith(tool.href + "/")
+                          ? "bg-brand-50 font-medium text-brand-800"
+                          : "text-slate-600 hover:bg-white hover:text-slate-900",
+                      )}
+                      title={tool.description}
+                    >
+                      {tool.title}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </div>
           </nav>
         </aside>
 
@@ -139,115 +113,127 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   );
 }
 
-export function LegalWorkGrid() {
-  return (
-    <div className="space-y-8">
-      {legalWorkSections.map((section) => {
-        const style = sectionStyles[section.color];
-        return (
-          <section key={section.id} className={cn("rounded-2xl border border-slate-200 p-4", style.sectionBg)}>
-            <div className="mb-3 flex items-center gap-2">
-              <span className={cn("rounded-full px-2.5 py-0.5 text-xs font-semibold", style.badge)}>
-                {section.title}
-              </span>
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              {section.items.map((item) => (
-                item.enabled ? (
-                  <Link
-                    key={item.id}
-                    href={item.href}
-                    className={cn(
-                      "block rounded-xl border bg-white p-4 shadow-sm transition hover:shadow-md",
-                      style.border,
-                      style.cardHover,
-                      "focus:outline-none focus:ring-2 focus:ring-brand-200",
-                    )}
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <h3 className="font-semibold text-slate-900">{item.title}</h3>
-                      <span className="shrink-0 rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-500">
-                        {item.phase}
-                      </span>
-                    </div>
-                    <p className="mt-1 text-sm text-slate-500">{item.description}</p>
-                  </Link>
-                ) : (
-                  <div
-                    key={item.id}
-                    className={cn("rounded-xl border bg-white p-4 opacity-70 shadow-sm", style.border)}
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <h3 className="font-semibold text-slate-900">{item.title}</h3>
-                      <span className="shrink-0 rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-500">
-                        {item.phase}
-                      </span>
-                    </div>
-                    <p className="mt-1 text-sm text-slate-500">{item.description}</p>
-                    <span className="mt-3 inline-flex rounded-md bg-slate-100 px-2.5 py-1.5 text-xs text-slate-600">
-                      Скоро
-                    </span>
-                  </div>
-                )
-              ))}
-            </div>
+function SidebarWorkPanel({
+  section,
+  pathname,
+}: {
+  section: NavSection;
+  pathname: string;
+}) {
+  const style = sectionVisual[section.color];
+  const projectHref = `/work/${section.id}/project`;
+  const taskHref = `/work/${section.id}/task`;
+  const active =
+    pathname.startsWith(projectHref) ||
+    pathname.startsWith(taskHref) ||
+    (section.id === "contracts" && pathname.startsWith("/contracts")) ||
+    (section.id === "consulting" && pathname.startsWith("/consulting")) ||
+    (section.id === "litigation" && pathname.startsWith("/litigation"));
 
-            {/* Встроенные инструменты только для договорной работы */}
-            {section.id === "contracts" && (
-              <div className="mt-3 rounded-lg border border-dashed border-slate-200 bg-slate-50/80 p-3">
-                <p className="mb-2 text-xs font-medium text-slate-500">
-                  Внутри задачи по договору (не отдельный раздел меню)
-                </p>
-                <div className="grid gap-2 sm:grid-cols-2">
-                  {contractEmbeddedTools.map((tool) => {
-                    const Icon = tool.id === "counterparty-check" ? ShieldCheck : Clock;
-                    return (
-                      <Link
-                        key={tool.id}
-                        href={tool.href}
-                        className="flex items-center justify-between gap-3 rounded-xl bg-white px-4 py-3 text-sm text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50"
-                        title={tool.description}
-                      >
-                        <div className="flex items-center gap-2.5">
-                          <Icon className="h-5 w-5 text-slate-500" />
-                          <div>
-                            <p className="font-medium text-slate-900">{tool.title}</p>
-                            <p className="text-xs text-slate-500">{tool.description}</p>
-                          </div>
-                        </div>
-                        <ChevronRight className="h-4 w-4 text-slate-300" />
-                      </Link>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-          </section>
-        );
-      })}
+  return (
+    <div
+      className={cn(
+        "rounded-xl border p-3 shadow-sm",
+        style.border,
+        style.sectionBg,
+        style.texture,
+        active && "ring-1 ring-slate-300/60",
+      )}
+    >
+      <div className="mb-2 flex items-center gap-1.5">
+        <span className={cn("h-1.5 w-1.5 rounded-full", style.dot)} />
+        <h2 className="text-sm font-semibold text-slate-900">{section.title}</h2>
+        <InfoTip text={section.help} />
+      </div>
+      <div className="grid grid-cols-2 gap-1.5">
+        <Link
+          href={projectHref}
+          className={cn(
+            "flex items-center justify-center gap-1 rounded-lg border px-2 py-2 text-xs font-medium text-slate-800 shadow-sm transition",
+            style.accentBtn,
+            pathname.startsWith(projectHref) && "ring-2 ring-slate-400/40",
+          )}
+        >
+          <FolderKanban className="h-3.5 w-3.5" />
+          Проект
+        </Link>
+        <Link
+          href={taskHref}
+          className={cn(
+            "flex items-center justify-center gap-1 rounded-lg border px-2 py-2 text-xs font-medium text-slate-800 shadow-sm transition",
+            style.accentBtn,
+            pathname.startsWith(taskHref) && "ring-2 ring-slate-400/40",
+          )}
+        >
+          <Zap className="h-3.5 w-3.5" />
+          Задача
+        </Link>
+      </div>
     </div>
   );
 }
 
-export function AuxiliaryLinks() {
+/** Dashboard: three textured work blocks with Project / One-off only. */
+export function LegalWorkGrid() {
   return (
-    <div className="mt-8 border-t border-slate-200 pt-6">
-      <h2 className="mb-3 text-sm font-medium text-slate-500">Настройки и сервисы</h2>
-      <div className="grid gap-2 sm:grid-cols-2">
-        {auxiliaryTools.map((tool) => (
-          <Link
-            key={tool.id}
-            href={tool.enabled ? tool.href : "/settings"}
-            className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm hover:bg-slate-50"
+    <div className="space-y-6">
+      {legalWorkSections.map((section) => {
+        const style = sectionVisual[section.color];
+        return (
+          <section
+            key={section.id}
+            className={cn(
+              "rounded-2xl border p-6 shadow-sm",
+              style.border,
+              style.sectionBg,
+              style.texture,
+            )}
           >
-            <div>
-              <p className="font-medium text-slate-700">{tool.title}</p>
-              <p className="text-xs text-slate-400">{tool.description}</p>
+            <div className="mb-5 flex flex-wrap items-center gap-3">
+              <h2 className="font-serif text-3xl font-semibold tracking-tight text-slate-900 sm:text-4xl">
+                {section.title}
+              </h2>
+              <InfoTip text={section.help} size="md" />
             </div>
-            <ChevronRight className="h-4 w-4 text-slate-300" />
-          </Link>
-        ))}
-      </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Link
+                href={`/work/${section.id}/project`}
+                className={cn(
+                  "group flex flex-col rounded-xl border bg-white/95 p-5 shadow-sm transition hover:shadow-md",
+                  style.border,
+                  style.cardHover,
+                )}
+              >
+                <div className="flex items-center gap-2">
+                  <FolderKanban className="h-5 w-5 text-slate-600" />
+                  <span className="text-lg font-semibold text-slate-900">Проект</span>
+                  <InfoTip text="Дело с накопленным контекстом: выберите существующий или создайте новый, затем работайте инструментами внутри карточки." />
+                </div>
+                <p className="mt-2 text-sm text-slate-500">
+                  Проект в работе или новый — контекст и инструменты на карточке дела
+                </p>
+              </Link>
+              <Link
+                href={`/work/${section.id}/task`}
+                className={cn(
+                  "group flex flex-col rounded-xl border bg-white/95 p-5 shadow-sm transition hover:shadow-md",
+                  style.border,
+                  style.cardHover,
+                )}
+              >
+                <div className="flex items-center gap-2">
+                  <Zap className="h-5 w-5 text-slate-600" />
+                  <span className="text-lg font-semibold text-slate-900">Разовая задача</span>
+                  <InfoTip text="Разовая проверка или генерация без дела. Из результата можно позже создать проект." />
+                </div>
+                <p className="mt-2 text-sm text-slate-500">
+                  Выбор инструмента без привязки к проекту
+                </p>
+              </Link>
+            </div>
+          </section>
+        );
+      })}
     </div>
   );
 }

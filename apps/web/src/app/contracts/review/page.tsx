@@ -1,16 +1,18 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
+import { useSearchParams } from "next/navigation";
 import { AuthGuard } from "@/components/auth-guard";
 import { AppShell } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { ReviewResultPanel, type RefineRequest } from "@/components/review-result-panel";
 import { useAuthStore, useActiveCompany } from "@/lib/store";
 import { useAppContext } from "@/lib/app-context";
 import { DocumentPicker, type DocumentPick } from "@/components/document-picker";
 import { reviewApi, referenceApi, documentApi, ApiError, type ReviewTask, type UploadedDocument, type ReferenceDocumentItem, type DocumentListItem } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { Loader2, CheckCircle2, Download } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import Link from "next/link";
 
 const MODES = [
@@ -35,27 +37,13 @@ const POSITION_OPTIONS: Record<string, { id: string; label: string; desc: string
   ],
 };
 
-function riskColor(score: number) {
-  if (score >= 9) return "bg-red-600 text-white";
-  if (score >= 7) return "bg-orange-500 text-white";
-  if (score >= 4) return "bg-yellow-400 text-yellow-900";
-  return "bg-green-500 text-white";
-}
-
-function severityBadge(severity: string) {
-  const map: Record<string, string> = {
-    critical: "bg-red-100 text-red-800",
-    high: "bg-orange-100 text-orange-800",
-    medium: "bg-yellow-100 text-yellow-800",
-    low: "bg-slate-100 text-slate-600",
-  };
-  return map[severity] || map.medium;
-}
-
 function ReviewPageContent() {
   const token = useAuthStore((s) => s.token)!;
   const company = useActiveCompany();
   const { industry } = useAppContext();
+  const searchParams = useSearchParams();
+  const projectIdFromUrl = searchParams.get("project_id");
+  const documentIdFromUrl = searchParams.get("document_id");
 
   const [documentPick, setDocumentPick] = useState<DocumentPick | null>(null);
   const [archiveDocs, setArchiveDocs] = useState<DocumentListItem[]>([]);
@@ -70,6 +58,9 @@ function ReviewPageContent() {
   const [error, setError] = useState<string | null>(null);
   const [step, setStep] = useState<"form" | "processing" | "done">("form");
   const [exporting, setExporting] = useState(false);
+  const [exportingAnnotated, setExportingAnnotated] = useState(false);
+  const [commentAuthor, setCommentAuthor] = useState("");
+  const [refining, setRefining] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const stopPoll = useCallback(() => {
@@ -89,6 +80,7 @@ function ReviewPageContent() {
           if (t.status === "completed" || t.status === "failed") {
             stopPoll();
             setStep("done");
+            setRefining(false);
           }
         } catch {
           stopPoll();
@@ -127,9 +119,21 @@ function ReviewPageContent() {
       .catch(() => setReferenceDocs([]));
     documentApi
       .list(token, company.id)
-      .then(setArchiveDocs)
+      .then((docs) => {
+        setArchiveDocs(docs);
+        if (documentIdFromUrl) {
+          const found = docs.find((d) => d.id === documentIdFromUrl);
+          if (found) {
+            setDocumentPick({ source: "archive", documentId: found.id, title: found.title });
+          }
+        }
+      })
       .catch(() => setArchiveDocs([]));
-  }, [token, company]);
+  }, [token, company, documentIdFromUrl]);
+
+  useEffect(() => {
+    if (company && !commentAuthor) setCommentAuthor(`Юрист ${company.name}`);
+  }, [company, commentAuthor]);
 
   const handleSubmit = async () => {
     if (!documentPick || !company) return;
@@ -157,6 +161,7 @@ function ReviewPageContent() {
         multi_agent: multiAgent,
         user_comment: comment || undefined,
         reference_document_id: referenceDocId || undefined,
+        project_id: projectIdFromUrl || undefined,
       });
       setTask(reviewTask);
       pollTask(reviewTask.id);
@@ -190,6 +195,63 @@ function ReviewPageContent() {
       setError(e instanceof ApiError ? e.message : "Не удалось скачать заключение");
     } finally {
       setExporting(false);
+    }
+  };
+
+  const handleExportAnnotated = async () => {
+    if (!task || !company) return;
+    setExportingAnnotated(true);
+    setError(null);
+    try {
+      const blob = await reviewApi.exportAnnotatedReview(token, task.id, company.id, commentAuthor);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const base =
+        documentPick?.source === "archive"
+          ? documentPick.title
+          : documentPick?.source === "upload"
+            ? documentPick.file.name
+            : doc?.title ?? "договор";
+      a.download = `Договор_с_замечаниями_${base.replace(/\.[^./]+$/, "")}.docx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Не удалось скачать договор с комментариями");
+    } finally {
+      setExportingAnnotated(false);
+    }
+  };
+
+  const handleRefine = async (req: RefineRequest) => {
+    if (!task || !company) return;
+    setRefining(true);
+    setError(null);
+    setStep("processing");
+    try {
+      const next = await reviewApi.startReview(token, {
+        document_id: task.document_id,
+        company_id: company.id,
+        review_mode: task.review_mode,
+        industry: task.industry,
+        multi_agent: task.multi_agent,
+        review_position: task.review_position ?? undefined,
+        reference_document_id: task.reference_document_id ?? undefined,
+        parent_task_id: task.id,
+        refine_scope: req.refineScope,
+        accepted_findings: req.acceptedFindings,
+        finding_feedback: req.findingFeedback,
+        lawyer_notes: req.lawyerNotes,
+        project_id: projectIdFromUrl || undefined,
+      });
+      setTask(next);
+      pollTask(next.id);
+    } catch (e) {
+      setStep("done");
+      setError(e instanceof ApiError ? e.message : "Не удалось запустить перепроверку");
+      setRefining(false);
     }
   };
 
@@ -383,115 +445,42 @@ function ReviewPageContent() {
       )}
 
       {step === "done" && task && (
-        <div className="space-y-6">
-          {task.status === "failed" ? (
-            <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-red-800">
-              <p className="font-medium">Ошибка проверки</p>
-              <p className="mt-1 text-sm">{task.error_message}</p>
-              <Button variant="secondary" className="mt-3" onClick={() => setStep("form")}>
-                Попробовать снова
-              </Button>
-            </div>
-          ) : (
-            <>
-              <div className="flex flex-wrap items-center gap-4">
-                <div
-                  className={cn(
-                    "flex h-16 w-16 items-center justify-center rounded-2xl text-2xl font-bold",
-                    riskColor(task.result?.risk_score ?? 5),
-                  )}
-                >
-                  {task.result?.risk_score ?? "—"}
-                </div>
-                <div>
-                  <p className="text-lg font-semibold text-slate-900">Оценка риска</p>
-                  <p className="text-sm text-slate-600">{task.result?.risk_rationale}</p>
-                  {task.result?.multi_agent && task.result.agents && (
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      {task.result.agents.map((a) => (
-                        <span
-                          key={a.agent}
-                          className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600"
-                        >
-                          {a.agent}: {a.findings_count} замечаний
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {doc?.parsed_preview && (
-                <Card>
-                  <CardHeader>
-                    <h2 className="text-sm font-semibold text-slate-700">Текст договора (фрагмент)</h2>
-                  </CardHeader>
-                  <CardContent>
-                    <pre className="max-h-48 overflow-auto whitespace-pre-wrap text-xs text-slate-600">
-                      {doc.parsed_preview}
-                    </pre>
-                  </CardContent>
-                </Card>
-              )}
-
-              <div>
-                <h2 className="mb-3 font-semibold text-slate-900">
-                  Замечания ({task.result?.findings?.length ?? 0})
-                </h2>
-                {task.result?.findings?.length === 0 ? (
-                  <div className="flex items-center gap-2 rounded-lg bg-green-50 p-4 text-green-800">
-                    <CheckCircle2 className="h-5 w-5" />
-                    Критических замечаний не выявлено
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    {task.result?.findings?.map((f, i) => (
-                      <div key={i} className="rounded-xl border border-slate-200 bg-white p-4">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="font-medium text-slate-900">{f.clause_ref || `Замечание ${i + 1}`}</span>
-                          <span className={cn("rounded px-2 py-0.5 text-xs font-medium", severityBadge(f.severity))}>
-                            {f.severity}
-                          </span>
-                          <span className="text-xs text-slate-400">{f.issue_type}</span>
-                        </div>
-                        {f.original_text && (
-                          <p className="mt-2 rounded bg-slate-50 p-2 text-sm text-slate-700 italic">
-                            «{f.original_text}»
-                          </p>
-                        )}
-                        <p className="mt-2 text-sm text-slate-600">{f.rationale}</p>
-                        {f.suggested_revision && (
-                          <p className="mt-2 text-sm text-brand-800">
-                            <span className="font-medium">Правка: </span>
-                            {f.suggested_revision}
-                          </p>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {error && (
-                <div className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
-              )}
-
-              <div className="flex flex-wrap gap-3">
-                <Button variant="secondary" onClick={handleExport} disabled={exporting}>
-                  {exporting ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Download className="h-4 w-4" />
-                  )}
-                  <span className="ml-1.5">Скачать заключение (.docx)</span>
-                </Button>
-                <Button variant="secondary" onClick={() => { setStep("form"); setTask(null); setDoc(null); setDocumentPick(null); setReferenceDocId(""); }}>
-                  Новая проверка
-                </Button>
-              </div>
-            </>
-          )}
-        </div>
+        <ReviewResultPanel
+          task={task}
+          documentTitle={
+            documentPick?.source === "archive"
+              ? documentPick.title
+              : documentPick?.source === "upload"
+                ? documentPick.file.name
+                : doc?.title
+          }
+          companyName={company?.name}
+          commentAuthor={commentAuthor}
+          onCommentAuthorChange={setCommentAuthor}
+          onExport={task.status === "completed" ? handleExport : undefined}
+          onExportAnnotated={task.status === "completed" ? handleExportAnnotated : undefined}
+          exporting={exporting}
+          exportingAnnotated={exportingAnnotated}
+          exportError={error}
+          onRefine={task.status === "completed" ? handleRefine : undefined}
+          refining={refining}
+          actions={
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setStep("form");
+                setTask(null);
+                setDoc(null);
+                setDocumentPick(null);
+                setReferenceDocId("");
+                setError(null);
+                setRefining(false);
+              }}
+            >
+              Новая проверка
+            </Button>
+          }
+        />
       )}
     </AppShell>
   );

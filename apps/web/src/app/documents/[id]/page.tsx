@@ -14,13 +14,14 @@ import {
   ragApi,
   reviewApi,
   comparisonApi,
+  projectApi,
   ApiError,
   type UploadedDocument,
   type ReviewListItem,
   type ComparisonListItem,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { ClipboardCheck, Download, FileText, Loader2, Trash2 } from "lucide-react";
+import { ClipboardCheck, Download, FileText, FolderKanban, Loader2, Trash2 } from "lucide-react";
 
 const STATUS_LABELS: Record<string, string> = {
   pending: "В очереди",
@@ -56,6 +57,7 @@ function DocumentDetailContent() {
   const [error, setError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
   const [deletingDoc, setDeletingDoc] = useState(false);
+  const [creatingProject, setCreatingProject] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -191,6 +193,30 @@ function DocumentDetailContent() {
                 <span className="ml-1.5">Проверить снова</span>
               </Button>
             </Link>
+            <Button
+              variant="secondary"
+              disabled={creatingProject || !company}
+              onClick={async () => {
+                if (!company || !doc) return;
+                setCreatingProject(true);
+                setError(null);
+                try {
+                  const p = await projectApi.fromDocument(token, {
+                    company_id: company.id,
+                    document_id: doc.id,
+                    title: doc.title,
+                    role: "ours",
+                  });
+                  router.push(`/projects/${p.id}`);
+                } catch (e) {
+                  setError(e instanceof ApiError ? e.message : "Не удалось создать проект");
+                  setCreatingProject(false);
+                }
+              }}
+            >
+              {creatingProject ? <Loader2 className="h-4 w-4 animate-spin" /> : <FolderKanban className="h-4 w-4" />}
+              <span className="ml-1.5">Создать проект</span>
+            </Button>
             <Button
               variant="secondary"
               disabled={!doc}

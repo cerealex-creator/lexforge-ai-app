@@ -596,3 +596,126 @@
 
 **Статус:** Завершено.
 **Следующий шаг:** Открыть http://localhost:3000/login.
+
+---
+
+## 2026-07-10 — Push + экспорт договора с комментариями Word
+
+**Запрос:** Запушить текущую версию; затем сделать скачивание .docx с комментариями в режиме рецензирования по findings ИИ.
+
+**Сделано:**
+- Запушено в `origin/main`: commit `9c89984` (позиции проверки + addendum-модель промптов).
+- Новый экспортёр `annotate_docx_with_comments`: копия исходного .docx, поиск цитат, Word comments + жёлтая подсветка; unmatched — в приложение в конце файла.
+- API: `GET /api/v1/reviews/{task_id}/export-annotated` (только для исходников .docx).
+- UI: кнопка «Договор с комментариями (.docx)» на странице проверки и в `ReviewResultPanel`.
+
+**Файлы:** `services/document_processor/annotated_export.py`, `apps/api/routers/reviews.py`, `apps/web/src/lib/api.ts`, `apps/web/src/components/review-result-panel.tsx`, `apps/web/src/app/contracts/review/page.tsx`, `apps/web/src/app/contracts/review/[taskId]/page.tsx`.
+
+**Статус:** Завершено (нужен перезапуск API).
+**Следующий шаг:** Проверить на реальной проверке .docx в Word (панель «Рецензирование» → «Показать примечания»).
+
+---
+
+## 2026-07-10 — Автор комментариев + перепроверка договора
+
+**Запрос:** Автор Word-комментариев от имени юриста компании (с полем ввода); перепроверка с одобрением замечаний и фокусом по указаниям юриста без ломания уже принятого.
+
+**Сделано:**
+- Экспорт annotated .docx: параметр `comment_author` (default `Юрист {company.name}`), поле в UI перед скачиванием; initials из имени автора.
+- Миграция `012_review_context`: JSONB `document_tasks.review_context`.
+- Create review: `parent_task_id`, `refine_scope` (`focus_only`|`supplement`), `accepted_findings`, `lawyer_notes` — новая задача, настройки наследуются от parent.
+- Промпт + merge: одобренные findings сохраняются, LLM возвращает только новые; дедуп и пересчёт risk_score; метаданные `refined_from` / `accepted_count` / `new_count`.
+- UI: чекбоксы «Одобрено», панель «Доработать проверку», бейдж перепроверки.
+
+**Файлы/артефакты:**
+- `services/document_processor/annotated_export.py`
+- `apps/api/routers/reviews.py`, `apps/api/schemas_review.py`
+- `packages/db/models.py`, `packages/db/migrations/versions/012_review_context.py`
+- `services/prompt_engine/review_prompts.py`, `services/ai_orchestrator/reviewer.py`
+- `apps/web/src/components/review-result-panel.tsx`, review pages, `apps/web/src/lib/api.ts`
+
+**Статус:** Завершено.
+
+---
+
+## 2026-07-10 — Убран preview договора + замечания к каждому finding
+
+**Запрос:** Зачем фрагмент договора на результате (рандом?); убрать если бесполезен. Добавить поле замечания юриста в каждый блок finding для перепроверки.
+
+**Сделано:**
+- Убран блок «Текст договора (фрагмент)» с экрана результата проверки (это были первые ~1500 символов `parsed_text`, не привязанные к findings — практической пользы нет).
+- У каждого finding: textarea «Замечание юриста к этому пункту»; при вводе снимается «Одобрено», блок подсвечивается; панель «Доработать проверку» открывается автоматически.
+- В API добавлен `finding_feedback: [{ finding, note }]` — сохраняется в `review_context`, попадает в промпт перепроверки; ИИ обязан пересмотреть/исправить конкретные пункты по комментарию юриста (вместе с общими указаниями внизу).
+- Режим `focus_only` допускает запуск при наличии только per-finding замечаний (без общего текста).
+
+**Файлы/артефакты:**
+- `apps/web/src/components/review-result-panel.tsx`
+- `apps/web/src/app/contracts/review/page.tsx`
+- `apps/web/src/app/contracts/review/[taskId]/page.tsx`
+- `apps/web/src/lib/api.ts`
+- `apps/api/schemas_review.py` (`FindingFeedbackIn`)
+- `apps/api/routers/reviews.py`
+- `services/prompt_engine/review_prompts.py`
+- `services/ai_orchestrator/reviewer.py`
+
+**Статус:** Завершено.
+**Следующий шаг:** Проверить перепроверку с замечаниями к отдельным блокам на реальном договоре.
+
+---
+
+## 2026-07-10 — Фаза 1: Проекты (Matter) + судебный профиль
+
+**Запрос:** Заложить проектный подход; stage/specificity; судебный профиль (КАД/упоминания) в проекте и вне; начать реализацию фазы 1.
+
+**Сделано:**
+- Миграция `013_projects`: таблицы `projects`, `project_documents`; nullable `project_id` на reviews/comparisons/legal_work/counterparty_checks.
+- Поля проекта: kind, stage, specificity, brief, counterparty, **judicial_profile** (JSONB: summary, kad_notes, media_notes, risk_flags, sources).
+- API `/api/v1/projects` (CRUD, from-document, attach/upload docs, judicial-profile).
+- Контекст проекта (`format_project_context`) подмешивается в review / comparison / counterparty.
+- Проверка контрагента с `project_id` обновляет `judicial_profile` (чеклист КАД; live-поиск дел — позже).
+- UI: `/projects`, `/projects/new`, `/projects/[id]`; «Создать проект» на карточке документа; CTA проверка/сравнение с `project_id` в query.
+
+**Файлы:** `013_projects.py`, `models.py`, `schemas_project.py`, `routers/projects.py`, `project_context.py`, `reviewer.py`, `comparator.py`, `counterparty_checker.py`, `apps/web/src/app/projects/**`, `api.ts`, `navigation.ts`.
+
+**Статус:** Завершено (фаза 1).
+**Следующий шаг:** Фаза 2 — memory_json (уступки), live КАД/реестры, «оценка redline в контексте проекта».
+
+---
+
+## 2026-07-10 — Фаза 2: память проекта + redline-in-context
+
+**Запрос:** Продолжить — фаза 2: memory_json (открытые риски, одобренные позиции, уступки), подмешивание в промпты, оценка redline в контексте проекта, UI.
+
+**Сделано:**
+- `project_memory.py`: `update_memory_from_review` / `update_memory_from_comparison`, `format_memory_block` (open_risks, accepted_positions, concessions, closed_issues, notes).
+- `format_project_context(..., for_redline=)` добавляет блок памяти и инструкции режима redline.
+- После успешной проверки/сравнения с `project_id` обновляется `project.memory_json`.
+- Comparison: `for_redline=True`, если у проекта есть memory/brief/stage/specificity.
+- UI `/projects/[id]`: блок «Память проекта»; CTA «Оценить redline контрагента».
+
+**Файлы/артефакты:**
+- `services/prompt_engine/project_memory.py`
+- `services/prompt_engine/project_context.py`
+- `services/ai_orchestrator/reviewer.py`, `comparator.py`
+- `apps/web/src/app/projects/[id]/page.tsx`
+
+**Статус:** Завершено (фаза 2 memory/redline; live КАД — отдельно).
+**Следующий шаг:** Live КАД/реестры; ручное редактирование/очистка памяти; проверить на реальном цикле review → refine → compare.
+
+---
+
+## 2026-07-10 — UX: рабочий стол Проект / Разовая задача
+
+**Запрос:** Перестроить рабочий стол и сайдбар: в блоках только «Проект» и «Разовая задача»; инструменты внутри проекта/экрана задачи; «i»-подсказки; настройки и недавние — в сайдбар; список проектов в работе.
+
+**Сделано:**
+- Дашборд: три фактурных блока с крупными заголовками и кнопками Проект / Разовая задача (+ InfoTip).
+- Экраны `/work/[section]/project` (выбор/создание проекта) и `/work/[section]/task` (выбор инструмента с «i»).
+- Сайдбар: панели разделов (Проект/Задача), «Проекты в работе», свёрнутые «Недавние задачи», «Настройки и сервисы»; убраны плоские списки инструментов.
+- Карточка проекта: блок «Инструменты» с ToolPanel + InfoTip; контекст по желанию.
+- `projects/new?kind=` из раздела; InfoTip / ToolPanel компоненты.
+
+**Файлы:** `navigation.ts`, `app-shell.tsx`, `dashboard/page.tsx`, `work/[section]/**`, `info-tip.tsx`, `tool-panel.tsx`, `sidebar-*.tsx`, `projects/[id]/page.tsx`, `projects/new/page.tsx`.
+
+**Статус:** Завершено (прототип для оценки).
+**Следующий шаг:** Протестировать UX; при необходимости — «создать проект из результата» на экранах review/compare; мини-опрос контекста.
