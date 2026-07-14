@@ -1,9 +1,11 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.api.database import (
+    DB_UNAVAILABLE_MSG,
     create_access_token,
     get_user_by_email,
     get_user_companies,
@@ -17,15 +19,25 @@ from packages.db.models import User, UserCompanyRole, UserRole
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
+def _db_unavailable() -> HTTPException:
+    return HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=DB_UNAVAILABLE_MSG)
+
+
 @router.post("/login", response_model=TokenResponse)
 async def login(body: LoginRequest, db: Annotated[AsyncSession, Depends(get_db)]):
-    user = await get_user_by_email(db, body.email)
+    try:
+        user = await get_user_by_email(db, body.email)
+    except (OperationalError, OSError):
+        raise _db_unavailable()
     if not user or not verify_password(body.password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Неверный email или пароль")
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Аккаунт деактивирован")
 
-    companies = await get_user_companies(db, user.id)
+    try:
+        companies = await get_user_companies(db, user.id)
+    except (OperationalError, OSError):
+        raise _db_unavailable()
     token = create_access_token({"sub": str(user.id), "email": user.email})
     return TokenResponse(
         access_token=token,

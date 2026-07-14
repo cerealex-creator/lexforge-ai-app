@@ -6,7 +6,8 @@ import { AuthGuard } from "@/components/auth-guard";
 import { AppShell } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { ReviewResultPanel, type RefineRequest } from "@/components/review-result-panel";
+import { ReviewResultPanel, type RefineRequest, type AnnotatedExportOptions, type ProtocolExportOptions, type RevisedExportOptions } from "@/components/review-result-panel";
+import { CreateProjectFromResultButton } from "@/components/create-project-from-result";
 import { useAuthStore, useActiveCompany } from "@/lib/store";
 import { useAppContext } from "@/lib/app-context";
 import { DocumentPicker, type DocumentPick } from "@/components/document-picker";
@@ -21,26 +22,91 @@ const MODES = [
   { id: "risks", label: "Угрозы и риски", desc: "Юридические риски и невыгодные условия" },
 ] as const;
 
-const POSITION_OPTIONS: Record<string, { id: string; label: string; desc: string }[]> = {
-  construction: [
-    { id: "contractor", label: "Мы — подрядчик", desc: "Защита интересов исполнителя работ" },
-    { id: "general_contractor", label: "Мы — генподрядчик", desc: "Контроль субподрядчиков и управляемые риски" },
-    { id: "customer", label: "Мы — заказчик", desc: "Контроль сроков/качества и ответственность подрядчика" },
-  ],
-  supply: [
-    { id: "supplier", label: "Мы — поставщик", desc: "Ограничение рисков приёмки/отказа, исполнимость оплаты" },
-    { id: "buyer", label: "Мы — покупатель", desc: "Качество, гарантия, приёмка и оплата по результату" },
-  ],
-  general: [
-    { id: "executor", label: "Мы — исполнитель", desc: "Чёткий предмет/результат, приёмка и ограничение ответственности" },
-    { id: "customer", label: "Мы — заказчик", desc: "KPI/результат, контроль, оплата после приёмки" },
-  ],
+type ReviewIndustry = "construction" | "production" | "supply" | "general";
+
+type PositionOption = {
+  industry: ReviewIndustry;
+  id: string;
+  label: string;
+  desc: string;
 };
+
+type PositionGroup = {
+  industry: ReviewIndustry;
+  title: string;
+  options: Omit<PositionOption, "industry">[];
+};
+
+/** All roles available for review (not limited by the header industry filter). */
+const POSITION_GROUPS: PositionGroup[] = [
+  {
+    industry: "construction",
+    title: "Строительство / подряд",
+    options: [
+      { id: "contractor", label: "Мы — подрядчик", desc: "Защита интересов исполнителя работ" },
+      {
+        id: "gc_vs_contractor",
+        label: "Мы — генподрядчик → подрядчик",
+        desc: "Договор с подрядчиком/субподрядчиком: зеркалирование, регресс, контроль",
+      },
+      {
+        id: "gc_vs_customer",
+        label: "Мы — генподрядчик ← заказчик",
+        desc: "Договор с заказчиком верхнего уровня: управляемые сроки, лимит ответственности, оплата",
+      },
+      { id: "customer", label: "Мы — заказчик (строительство)", desc: "Контроль сроков/качества и ответственность подрядчика" },
+    ],
+  },
+  {
+    industry: "supply",
+    title: "Поставка товаров",
+    options: [
+      { id: "supplier", label: "Мы — поставщик", desc: "Ограничение рисков приёмки/отказа, исполнимость оплаты" },
+      { id: "buyer", label: "Мы — покупатель", desc: "Качество, гарантия, приёмка и оплата по результату" },
+    ],
+  },
+  {
+    industry: "production",
+    title: "Производство",
+    options: [
+      { id: "supplier", label: "Мы — поставщик (производство)", desc: "Отгрузка, приёмка, оплата, лимит ответственности" },
+      { id: "buyer", label: "Мы — покупатель (производство)", desc: "Качество, гарантия, спецификация и сроки" },
+    ],
+  },
+  {
+    industry: "general",
+    title: "Услуги",
+    options: [
+      {
+        id: "executor",
+        label: "Мы — поставщик услуг",
+        desc: "Чёткий предмет/результат, приёмка и ограничение ответственности исполнителя",
+      },
+      {
+        id: "customer",
+        label: "Мы — заказчик услуг",
+        desc: "KPI/результат, контроль, оплата после приёмки",
+      },
+    ],
+  },
+];
+
+const ALL_POSITIONS: PositionOption[] = POSITION_GROUPS.flatMap((g) =>
+  g.options.map((o) => ({ ...o, industry: g.industry })),
+);
+
+function positionKey(industry: string, id: string) {
+  return `${industry}.${id}`;
+}
+
+function defaultPositionForIndustry(code: ReviewIndustry): PositionOption {
+  return ALL_POSITIONS.find((p) => p.industry === code) ?? ALL_POSITIONS[0];
+}
 
 function ReviewPageContent() {
   const token = useAuthStore((s) => s.token)!;
   const company = useActiveCompany();
-  const { industry } = useAppContext();
+  const { industry, setIndustry } = useAppContext();
   const searchParams = useSearchParams();
   const projectIdFromUrl = searchParams.get("project_id");
   const documentIdFromUrl = searchParams.get("document_id");
@@ -49,10 +115,14 @@ function ReviewPageContent() {
   const [archiveDocs, setArchiveDocs] = useState<DocumentListItem[]>([]);
   const [mode, setMode] = useState<string>("full");
   const [multiAgent, setMultiAgent] = useState(false);
-  const [reviewPosition, setReviewPosition] = useState<string>("contractor");
+  const [selectedPosition, setSelectedPosition] = useState<PositionOption>(() =>
+    defaultPositionForIndustry(industry as ReviewIndustry),
+  );
   const [comment, setComment] = useState("");
   const [referenceDocs, setReferenceDocs] = useState<ReferenceDocumentItem[]>([]);
   const [referenceDocId, setReferenceDocId] = useState<string>("");
+  const [cascadeAnalysis, setCascadeAnalysis] = useState(false);
+  const [upstreamDocId, setUpstreamDocId] = useState<string>("");
   const [doc, setDoc] = useState<UploadedDocument | null>(null);
   const [task, setTask] = useState<ReviewTask | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -61,7 +131,14 @@ function ReviewPageContent() {
   const [exportingAnnotated, setExportingAnnotated] = useState(false);
   const [commentAuthor, setCommentAuthor] = useState("");
   const [refining, setRefining] = useState(false);
+  const [approving, setApproving] = useState(false);
+  const [dismissing, setDismissing] = useState(false);
+  const [exportingProtocol, setExportingProtocol] = useState(false);
+  const [exportingRevised, setExportingRevised] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const reviewPosition = selectedPosition.id;
+  const reviewIndustry = selectedPosition.industry;
 
   const stopPoll = useCallback(() => {
     if (pollRef.current) {
@@ -102,14 +179,27 @@ function ReviewPageContent() {
 
   useEffect(() => () => stopPoll(), [stopPoll]);
 
-  // When industry changes, reset position to first valid option for that industry.
+  // Keep position aligned with header industry when user switches industry there.
   useEffect(() => {
-    const opts = POSITION_OPTIONS[industry];
-    if (!opts || opts.length === 0) return;
-    if (!opts.some((o) => o.id === reviewPosition)) {
-      setReviewPosition(opts[0].id);
+    const code = industry as ReviewIndustry;
+    if (selectedPosition.industry === code) return;
+    const next = defaultPositionForIndustry(code);
+    setSelectedPosition(next);
+  }, [industry]); // eslint-disable-line react-hooks/exhaustive-deps -- only react to header industry changes
+
+  useEffect(() => {
+    if (reviewPosition !== "gc_vs_contractor") {
+      setCascadeAnalysis(false);
+      setUpstreamDocId("");
     }
-  }, [industry, reviewPosition]);
+  }, [reviewPosition]);
+
+  const selectPosition = (opt: PositionOption) => {
+    setSelectedPosition(opt);
+    if (opt.industry !== industry) {
+      setIndustry(opt.industry);
+    }
+  };
 
   useEffect(() => {
     if (!company) return;
@@ -137,6 +227,10 @@ function ReviewPageContent() {
 
   const handleSubmit = async () => {
     if (!documentPick || !company) return;
+    if (cascadeAnalysis && !upstreamDocId) {
+      setError("Для каскадного анализа выберите договор с Заказчиком из картотеки");
+      return;
+    }
     setError(null);
     setStep("processing");
 
@@ -152,16 +246,24 @@ function ReviewPageContent() {
         documentId = uploaded.id;
       }
 
+      if (cascadeAnalysis && upstreamDocId === documentId) {
+        setStep("form");
+        setError("Договор с Заказчиком должен отличаться от проверяемого договора с Подрядчиком");
+        return;
+      }
+
       const reviewTask = await reviewApi.startReview(token, {
         document_id: documentId,
         company_id: company.id,
         review_mode: mode,
-        industry,
-        review_position: POSITION_OPTIONS[industry]?.length ? reviewPosition : undefined,
+        industry: reviewIndustry,
+        review_position: reviewPosition,
         multi_agent: multiAgent,
         user_comment: comment || undefined,
         reference_document_id: referenceDocId || undefined,
         project_id: projectIdFromUrl || undefined,
+        cascade_analysis: cascadeAnalysis || undefined,
+        upstream_document_id: cascadeAnalysis ? upstreamDocId : undefined,
       });
       setTask(reviewTask);
       pollTask(reviewTask.id);
@@ -198,12 +300,17 @@ function ReviewPageContent() {
     }
   };
 
-  const handleExportAnnotated = async () => {
+  const handleExportAnnotated = async (opts: AnnotatedExportOptions) => {
     if (!task || !company) return;
     setExportingAnnotated(true);
     setError(null);
     try {
-      const blob = await reviewApi.exportAnnotatedReview(token, task.id, company.id, commentAuthor);
+      const blob = await reviewApi.exportAnnotatedReview(token, task.id, company.id, {
+        commentAuthor: opts.commentAuthor,
+        includeMetadata: opts.includeMetadata,
+        includeAiDisclaimer: opts.includeAiDisclaimer,
+        onlyApproved: opts.onlyApproved,
+      });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -222,6 +329,66 @@ function ReviewPageContent() {
       setError(e instanceof ApiError ? e.message : "Не удалось скачать договор с комментариями");
     } finally {
       setExportingAnnotated(false);
+    }
+  };
+
+  const handleExportProtocol = async (opts: ProtocolExportOptions) => {
+    if (!task || !company) return;
+    setExportingProtocol(true);
+    setError(null);
+    try {
+      const blob = await reviewApi.exportDisagreementProtocol(token, task.id, company.id, {
+        onlyApproved: opts.onlyApproved,
+        includeOurComments: opts.includeOurComments,
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const base =
+        documentPick?.source === "archive"
+          ? documentPick.title
+          : documentPick?.source === "upload"
+            ? documentPick.file.name
+            : doc?.title ?? "договор";
+      a.download = `Протокол_разногласий_${base.replace(/\.[^./]+$/, "")}.docx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Не удалось скачать протокол разногласий");
+    } finally {
+      setExportingProtocol(false);
+    }
+  };
+
+  const handleExportRevised = async (opts: RevisedExportOptions) => {
+    if (!task || !company) return;
+    setExportingRevised(true);
+    setError(null);
+    try {
+      const blob = await reviewApi.exportRevisedEdition(token, task.id, company.id, {
+        onlyApproved: opts.onlyApproved,
+        saveToArchive: opts.saveToArchive,
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const base =
+        documentPick?.source === "archive"
+          ? documentPick.title
+          : documentPick?.source === "upload"
+            ? documentPick.file.name
+            : doc?.title ?? "договор";
+      a.download = `Новая_редакция_${base.replace(/\.[^./]+$/, "")}.docx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Не удалось скачать новую редакцию");
+    } finally {
+      setExportingRevised(false);
     }
   };
 
@@ -244,6 +411,7 @@ function ReviewPageContent() {
         accepted_findings: req.acceptedFindings,
         finding_feedback: req.findingFeedback,
         lawyer_notes: req.lawyerNotes,
+        dismissed_findings: task.result?.dismissed_findings ?? [],
         project_id: projectIdFromUrl || undefined,
       });
       setTask(next);
@@ -252,6 +420,34 @@ function ReviewPageContent() {
       setStep("done");
       setError(e instanceof ApiError ? e.message : "Не удалось запустить перепроверку");
       setRefining(false);
+    }
+  };
+
+  const handleApproveToVault = async (findings: import("@/lib/api").Finding[]) => {
+    if (!task || !company || !findings.length) return;
+    setApproving(true);
+    setError(null);
+    try {
+      const next = await reviewApi.approveFindings(token, task.id, company.id, findings);
+      setTask(next);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Не удалось добавить в копилку");
+    } finally {
+      setApproving(false);
+    }
+  };
+
+  const handleDismissFindings = async (findings: import("@/lib/api").Finding[]) => {
+    if (!task || !company || !findings.length) return;
+    setDismissing(true);
+    setError(null);
+    try {
+      const next = await reviewApi.dismissFindings(token, task.id, company.id, findings);
+      setTask(next);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Не удалось отменить замечание");
+    } finally {
+      setDismissing(false);
     }
   };
 
@@ -323,31 +519,98 @@ function ReviewPageContent() {
             </CardContent>
           </Card>
 
-          {POSITION_OPTIONS[industry]?.length > 0 && (
+          <Card>
+            <CardHeader>
+              <h2 className="font-semibold">3. Наша позиция в договоре</h2>
+              <p className="mt-1 text-xs text-slate-500">
+                Выберите роль: подряд / поставка / услуги. От позиции зависят риски и правки ИИ.
+              </p>
+            </CardHeader>
+            <CardContent className="space-y-5">
+              {POSITION_GROUPS.map((group) => (
+                <div key={group.industry}>
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    {group.title}
+                  </p>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {group.options.map((p) => {
+                      const opt: PositionOption = { ...p, industry: group.industry };
+                      const active =
+                        positionKey(selectedPosition.industry, selectedPosition.id) ===
+                        positionKey(opt.industry, opt.id);
+                      return (
+                        <button
+                          key={positionKey(opt.industry, opt.id)}
+                          type="button"
+                          onClick={() => selectPosition(opt)}
+                          className={cn(
+                            "rounded-lg border p-3 text-left transition",
+                            active
+                              ? "border-brand-600 bg-brand-50 ring-1 ring-brand-600"
+                              : "border-slate-200 hover:border-slate-300",
+                          )}
+                        >
+                          <p className="font-medium text-slate-900">{p.label}</p>
+                          <p className="mt-1 text-xs text-slate-500">{p.desc}</p>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+
+          {reviewPosition === "gc_vs_contractor" && selectedPosition.industry === "construction" && (
             <Card>
               <CardHeader>
-                <h2 className="font-semibold">3. Наша позиция в договоре</h2>
+                <h2 className="font-semibold">Каскадный анализ</h2>
                 <p className="mt-1 text-xs text-slate-500">
-                  От позиции зависит, какие условия считаются рискованными и какие правки предлагает ИИ
+                  Сравнить договор с Подрядчиком и договор с Заказчиком: найти разрывы, где генподрядчик
+                  рискует больше, чем может переложить вниз
                 </p>
               </CardHeader>
-              <CardContent className="grid gap-2 sm:grid-cols-3">
-                {POSITION_OPTIONS[industry].map((p) => (
-                  <button
-                    key={p.id}
-                    type="button"
-                    onClick={() => setReviewPosition(p.id)}
-                    className={cn(
-                      "rounded-lg border p-3 text-left transition",
-                      reviewPosition === p.id
-                        ? "border-brand-600 bg-brand-50 ring-1 ring-brand-600"
-                        : "border-slate-200 hover:border-slate-300",
+              <CardContent className="space-y-3">
+                <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-slate-200 p-3 hover:bg-slate-50">
+                  <input
+                    type="checkbox"
+                    checked={cascadeAnalysis}
+                    onChange={(e) => setCascadeAnalysis(e.target.checked)}
+                    className="mt-1 rounded border-slate-300"
+                  />
+                  <div>
+                    <p className="text-sm font-medium text-slate-900">Включить каскадный анализ</p>
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      Основной документ выше — договор с подрядчиком; ниже выберите договор с заказчиком
+                      из картотеки
+                    </p>
+                  </div>
+                </label>
+                {cascadeAnalysis && (
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-slate-600">
+                      Договор с Заказчиком (верхний уровень)
+                    </label>
+                    <select
+                      value={upstreamDocId}
+                      onChange={(e) => setUpstreamDocId(e.target.value)}
+                      className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20"
+                    >
+                      <option value="">— выберите из картотеки —</option>
+                      {archiveDocs.map((d) => (
+                        <option key={d.id} value={d.id}>
+                          {d.title}
+                        </option>
+                      ))}
+                    </select>
+                    {archiveDocs.length === 0 && (
+                      <p className="mt-1 text-xs text-amber-700">
+                        В картотеке пока нет документов — сначала загрузите договор с заказчиком в
+                        картотеку или через загрузку на другой проверке.
+                      </p>
                     )}
-                  >
-                    <p className="font-medium text-slate-900">{p.label}</p>
-                    <p className="mt-1 text-xs text-slate-500">{p.desc}</p>
-                  </button>
-                ))}
+                  </div>
+                )}
               </CardContent>
             </Card>
           )}
@@ -459,26 +722,50 @@ function ReviewPageContent() {
           onCommentAuthorChange={setCommentAuthor}
           onExport={task.status === "completed" ? handleExport : undefined}
           onExportAnnotated={task.status === "completed" ? handleExportAnnotated : undefined}
+          onExportProtocol={task.status === "completed" ? handleExportProtocol : undefined}
+          onExportRevised={task.status === "completed" ? handleExportRevised : undefined}
           exporting={exporting}
           exportingAnnotated={exportingAnnotated}
+          exportingProtocol={exportingProtocol}
+          exportingRevised={exportingRevised}
           exportError={error}
           onRefine={task.status === "completed" ? handleRefine : undefined}
+          onApproveToVault={task.status === "completed" ? handleApproveToVault : undefined}
+          onDismissFindings={task.status === "completed" ? handleDismissFindings : undefined}
           refining={refining}
+          approving={approving}
+          dismissing={dismissing}
           actions={
-            <Button
-              variant="secondary"
-              onClick={() => {
-                setStep("form");
-                setTask(null);
-                setDoc(null);
-                setDocumentPick(null);
-                setReferenceDocId("");
-                setError(null);
-                setRefining(false);
-              }}
-            >
-              Новая проверка
-            </Button>
+            <>
+              {task.status === "completed" && (
+                <CreateProjectFromResultButton
+                  documentId={task.document_id}
+                  title={
+                    documentPick?.source === "archive"
+                      ? documentPick.title
+                      : documentPick?.source === "upload"
+                        ? documentPick.file.name
+                        : doc?.title
+                  }
+                  alreadyInProject={Boolean(task.project_id || projectIdFromUrl)}
+                  existingProjectId={task.project_id || projectIdFromUrl}
+                />
+              )}
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setStep("form");
+                  setTask(null);
+                  setDoc(null);
+                  setDocumentPick(null);
+                  setReferenceDocId("");
+                  setError(null);
+                  setRefining(false);
+                }}
+              >
+                Новая проверка
+              </Button>
+            </>
           }
         />
       )}

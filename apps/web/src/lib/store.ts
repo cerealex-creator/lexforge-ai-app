@@ -13,6 +13,14 @@ interface AuthState {
   logout: () => void;
 }
 
+/** Clear persisted auth and redirect to login (401 on authenticated requests). */
+export function handleSessionExpired() {
+  useAuthStore.getState().logout();
+  if (typeof window !== "undefined" && !window.location.pathname.startsWith("/login")) {
+    window.location.href = "/login?expired=1";
+  }
+}
+
 export const useAuthStore = create<AuthState>()(
   persist(
     (set, get) => ({

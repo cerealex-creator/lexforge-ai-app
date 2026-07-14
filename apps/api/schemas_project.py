@@ -79,6 +79,7 @@ class ProjectUpdateRequest(BaseModel):
     specificity: Optional[str] = None
     brief: Optional[str] = None
     judicial_profile: Optional[dict[str, Any]] = None
+    memory_json: Optional[dict[str, Any]] = None
 
 
 class ProjectFromDocumentRequest(BaseModel):

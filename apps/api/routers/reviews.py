@@ -8,12 +8,14 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import inspect as sa_inspect, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
-from sqlalchemy.orm.attributes import NO_VALUE
+from sqlalchemy.orm.attributes import NO_VALUE, flag_modified
 
 from apps.api.dependencies import get_current_user, get_db
 from apps.api.schemas_review import (
     FindingOut,
+    ReviewApproveRequest,
     ReviewCreateRequest,
+    ReviewDismissRequest,
     ReviewListItemOut,
     ReviewResultOut,
     ReviewTaskOut,
@@ -32,8 +34,19 @@ from packages.db.models import (
     UserCompanyRole,
 )
 from services.ai_orchestrator.reviewer import run_contract_review
+from services.ai_orchestrator.review_findings import (
+    ensure_finding_ids,
+    extract_parent_dismissed,
+    extract_parent_vault,
+    findings_for_annotated_export,
+    merge_dismissed,
+    merge_vault,
+    parent_working_findings,
+)
 from services.document_processor.annotated_export import annotate_docx_with_comments
-from services.document_processor.exporter import build_review_report
+from services.document_processor.apply_revisions import apply_revisions_to_docx
+from services.document_processor.exporter import build_disagreement_protocol, build_review_report
+from services.document_processor.store_generated import store_generated_docx
 
 router = APIRouter(prefix="/reviews", tags=["reviews"])
 
@@ -49,29 +62,45 @@ async def _verify_company_access(db: AsyncSession, user_id: uuid.UUID, company_i
         raise HTTPException(status_code=403, detail="Нет доступа к компании")
 
 
+def _findings_out(raw: list) -> list[FindingOut]:
+    out: list[FindingOut] = []
+    for f in raw:
+        if isinstance(f, dict):
+            out.append(FindingOut(**{k: v for k, v in f.items() if k in FindingOut.model_fields}))
+        else:
+            out.append(FindingOut())
+    return out
+
+
 def _task_to_out(task: DocumentTask) -> ReviewTaskOut:
     result_out = None
     task_result = sa_inspect(task).attrs.result.loaded_value
     if task_result is not NO_VALUE and task_result is not None:
         data = task_result.result_json or {}
-        findings = [
-            FindingOut(**f) if isinstance(f, dict) else FindingOut()
-            for f in data.get("findings", [])
-        ]
+        findings = _findings_out(data.get("findings", []))
+        vault = _findings_out(data.get("approved_vault", []))
+        dismissed = _findings_out(data.get("dismissed_findings", []))
         refined_from = data.get("refined_from")
         result_out = ReviewResultOut(
             risk_score=task_result.risk_score,
             risk_rationale=data.get("risk_rationale"),
             findings=findings,
+            approved_vault=vault,
+            dismissed_findings=dismissed,
             multi_agent=data.get("multi_agent"),
             agents=data.get("agents"),
             refined_from=uuid.UUID(str(refined_from)) if refined_from else None,
             refine_scope=data.get("refine_scope"),
             accepted_count=data.get("accepted_count"),
+            revised_count=data.get("revised_count"),
             new_count=data.get("new_count"),
+            deferred_count=data.get("deferred_count"),
+            dismissed_count=data.get("dismissed_count", len(dismissed)),
+            cascade_analysis=data.get("cascade_analysis"),
         )
     ctx = task.review_context or {}
     parent_raw = ctx.get("parent_task_id")
+    upstream_raw = ctx.get("upstream_document_id")
     return ReviewTaskOut(
         id=task.id,
         document_id=task.document_id,
@@ -88,6 +117,9 @@ def _task_to_out(task: DocumentTask) -> ReviewTaskOut:
         result=result_out,
         parent_task_id=uuid.UUID(str(parent_raw)) if parent_raw else None,
         refine_scope=ctx.get("refine_scope"),
+        project_id=task.project_id,
+        cascade_analysis=bool(ctx.get("cascade_analysis")),
+        upstream_document_id=uuid.UUID(str(upstream_raw)) if upstream_raw else None,
     )
 
 
@@ -108,6 +140,29 @@ async def create_review(
         reference = await db.get(ReferenceDocument, body.reference_document_id)
         if not reference or reference.company_id != body.company_id:
             raise HTTPException(status_code=404, detail="Опорный документ не найден")
+
+    cascade_analysis = bool(body.cascade_analysis)
+    upstream_document_id = body.upstream_document_id
+    if cascade_analysis:
+        pos = (body.review_position or "").strip()
+        if pos not in ("gc_vs_contractor", "general_contractor"):
+            raise HTTPException(
+                status_code=422,
+                detail="Каскадный анализ доступен только для позиции «Генподрядчик → Подрядчик»",
+            )
+        if not upstream_document_id:
+            raise HTTPException(
+                status_code=422,
+                detail="Для каскадного анализа загрузите/выберите договор с Заказчиком (верхний уровень)",
+            )
+        if upstream_document_id == body.document_id:
+            raise HTTPException(
+                status_code=422,
+                detail="Договор с Заказчиком должен отличаться от договора с Подрядчиком",
+            )
+        upstream_doc = await db.get(Document, upstream_document_id)
+        if not upstream_doc or upstream_doc.company_id != body.company_id:
+            raise HTTPException(status_code=404, detail="Договор с Заказчиком не найден")
 
     review_context = None
     user_comment = body.user_comment
@@ -139,17 +194,17 @@ async def create_review(
         if parent.status != TaskStatus.completed:
             raise HTTPException(status_code=400, detail="Перепроверка возможна только для завершённой проверки")
 
-        refine_scope = body.refine_scope or "supplement"
+        refine_scope = body.refine_scope or "focus_only"
         lawyer_notes = (body.lawyer_notes or body.user_comment or "").strip()
         finding_feedback = [
             {"finding": fb.finding.model_dump(), "note": fb.note.strip()}
             for fb in body.finding_feedback
             if fb.note.strip()
         ]
-        if refine_scope == "focus_only" and not lawyer_notes and not finding_feedback:
+        if refine_scope == "focus_only" and not lawyer_notes and not finding_feedback and not body.accepted_findings:
             raise HTTPException(
                 status_code=422,
-                detail="Для режима «Только по указаниям» нужны общие замечания или замечания к конкретным пунктам",
+                detail="Для доработки укажите замечания к пунктам, общие указания или одобрите пункты в копилку",
             )
 
         # Inherit settings from parent unless explicitly overridden in a meaningful way —
@@ -162,19 +217,38 @@ async def create_review(
         user_comment = lawyer_notes or None
         if not project_id:
             project_id = parent.project_id
+        parent_ctx = parent.review_context or {}
+        cascade_analysis = bool(parent_ctx.get("cascade_analysis"))
+        upstream_raw = parent_ctx.get("upstream_document_id")
+        upstream_document_id = uuid.UUID(str(upstream_raw)) if upstream_raw else None
 
         parent_risk = parent.result.risk_score if parent.result else None
+        parent_result_json = (parent.result.result_json or {}) if parent.result else {}
+        parent_vault = extract_parent_vault(parent_result_json, parent_ctx)
         accepted = [f.model_dump() for f in body.accepted_findings]
+        approved_vault = merge_vault(parent_vault, accepted)
+        parent_findings = parent_working_findings(parent_result_json)
+        parent_dismissed = extract_parent_dismissed(parent_result_json, parent_ctx)
+        dismissed = merge_dismissed(parent_dismissed, [f.model_dump() for f in body.dismissed_findings])
+
         review_context = {
             "parent_task_id": str(parent.id),
             "refine_scope": refine_scope,
             "accepted_findings": accepted,
+            "approved_vault": approved_vault,
+            "dismissed_findings": dismissed,
+            "parent_findings": parent_findings,
             "finding_feedback": finding_feedback,
             "lawyer_notes": lawyer_notes,
             "parent_risk_score": parent_risk,
-            "parent_risk_rationale": (parent.result.result_json or {}).get("risk_rationale")
-            if parent.result
-            else None,
+            "parent_risk_rationale": parent_result_json.get("risk_rationale"),
+            "cascade_analysis": cascade_analysis,
+            "upstream_document_id": str(upstream_document_id) if upstream_document_id else None,
+        }
+    elif cascade_analysis:
+        review_context = {
+            "cascade_analysis": True,
+            "upstream_document_id": str(upstream_document_id),
         }
 
     task = DocumentTask(
@@ -360,6 +434,94 @@ def _is_docx_document(document: Document | None, storage_path: str) -> bool:
     )
 
 
+@router.post("/{task_id}/approve", response_model=ReviewTaskOut)
+async def approve_findings_to_vault(
+    task_id: uuid.UUID,
+    body: ReviewApproveRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Add findings to approved_vault without re-running the LLM."""
+    await _verify_company_access(db, user.id, body.company_id)
+    result = await db.execute(
+        select(DocumentTask)
+        .options(selectinload(DocumentTask.result))
+        .where(DocumentTask.id == task_id, DocumentTask.company_id == body.company_id)
+    )
+    task = result.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=404, detail="Задача не найдена")
+    if task.status != TaskStatus.completed or not task.result:
+        raise HTTPException(status_code=400, detail="Одобрение доступно только для завершённой проверки")
+
+    data = dict(task.result.result_json or {})
+    vault = merge_vault(data.get("approved_vault") or [], [f.model_dump() for f in body.findings])
+    vault_ids = {str(f.get("id") or "") for f in vault}
+
+    working = []
+    for f in ensure_finding_ids(data.get("findings") or []):
+        if str(f.get("id") or "") in vault_ids:
+            continue
+        working.append(f)
+
+    data["approved_vault"] = vault
+    data["findings"] = working
+    data["accepted_count"] = len(vault)
+    task.result.result_json = data
+    flag_modified(task.result, "result_json")
+    await db.commit()
+    await db.refresh(task)
+    return _task_to_out(task)
+
+
+@router.post("/{task_id}/dismiss", response_model=ReviewTaskOut)
+async def dismiss_findings(
+    task_id: uuid.UUID,
+    body: ReviewDismissRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Remove findings from the working set and blacklist them for future refine."""
+    await _verify_company_access(db, user.id, body.company_id)
+    result = await db.execute(
+        select(DocumentTask)
+        .options(selectinload(DocumentTask.result))
+        .where(DocumentTask.id == task_id, DocumentTask.company_id == body.company_id)
+    )
+    task = result.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=404, detail="Задача не найдена")
+    if task.status != TaskStatus.completed or not task.result:
+        raise HTTPException(status_code=400, detail="Отмена доступна только для завершённой проверки")
+
+    data = dict(task.result.result_json or {})
+    newly = [f.model_dump() for f in body.findings]
+    dismissed = merge_dismissed(data.get("dismissed_findings") or [], newly)
+    dismissed_ids = {str(f.get("id") or "") for f in dismissed if f.get("id")}
+
+    working = [
+        f
+        for f in ensure_finding_ids(data.get("findings") or [])
+        if str(f.get("id") or "") not in dismissed_ids
+    ]
+    vault = [
+        f
+        for f in ensure_finding_ids(data.get("approved_vault") or [], default_status="from_vault")
+        if str(f.get("id") or "") not in dismissed_ids
+    ]
+
+    data["dismissed_findings"] = dismissed
+    data["findings"] = working
+    data["approved_vault"] = vault
+    data["dismissed_count"] = len(dismissed)
+    data["accepted_count"] = len(vault)
+    task.result.result_json = data
+    flag_modified(task.result, "result_json")
+    await db.commit()
+    await db.refresh(task)
+    return _task_to_out(task)
+
+
 @router.get("/{task_id}/export-annotated")
 async def export_review_annotated(
     task_id: uuid.UUID,
@@ -367,8 +529,15 @@ async def export_review_annotated(
     user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
     comment_author: str | None = None,
+    include_metadata: bool = False,
+    include_ai_disclaimer: bool = False,
+    only_approved: bool = True,
 ):
-    """Download the source contract .docx with Word review comments on matched findings."""
+    """Download the source contract .docx with Word review comments.
+
+    By default only approved_vault findings are exported (counterparty-facing).
+    Pass only_approved=false to include the full working set as well.
+    """
     await _verify_company_access(db, user.id, company_id)
 
     result = await db.execute(
@@ -406,11 +575,22 @@ async def export_review_annotated(
         raise HTTPException(status_code=404, detail="Файл отсутствует на диске")
 
     data = (task.result.result_json or {}) if task.result else {}
-    findings = data.get("findings", [])
+    findings = findings_for_annotated_export(data, only_approved=only_approved)
+    if only_approved and not findings:
+        raise HTTPException(
+            status_code=400,
+            detail="Копилка одобренных пуста. Одобрите замечания или снимите «только одобренные».",
+        )
     author = (comment_author or "").strip() or f"Юрист {company.name if company else 'компании'}"
 
     try:
-        docx_bytes, _stats = annotate_docx_with_comments(file_path, findings, author=author)
+        docx_bytes, _stats = annotate_docx_with_comments(
+            file_path,
+            findings,
+            author=author,
+            include_metadata=include_metadata,
+            include_ai_disclaimer=include_ai_disclaimer,
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Не удалось сформировать файл с комментариями: {e}") from e
 
@@ -424,5 +604,158 @@ async def export_review_annotated(
             "Content-Disposition": (
                 f"attachment; filename=\"annotated_review.docx\"; filename*=UTF-8''{quote(filename)}"
             )
+        },
+    )
+
+
+@router.get("/{task_id}/export-protocol")
+async def export_disagreement_protocol(
+    task_id: uuid.UUID,
+    company_id: uuid.UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    only_approved: bool = True,
+    include_our_comments: bool = True,
+    our_party_label: str | None = None,
+    their_party_label: str | None = None,
+):
+    """Download a tabular протокол разногласий (.docx) from review findings."""
+    await _verify_company_access(db, user.id, company_id)
+
+    result = await db.execute(
+        select(DocumentTask)
+        .options(selectinload(DocumentTask.result))
+        .where(DocumentTask.id == task_id, DocumentTask.company_id == company_id)
+    )
+    task = result.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=404, detail="Задача не найдена")
+    if task.status != TaskStatus.completed:
+        raise HTTPException(status_code=400, detail="Проверка ещё не завершена")
+
+    document = await db.get(Document, task.document_id)
+    company = await db.get(Company, task.company_id)
+
+    data = (task.result.result_json or {}) if task.result else {}
+    findings = findings_for_annotated_export(data, only_approved=only_approved)
+    if only_approved and not findings:
+        raise HTTPException(
+            status_code=400,
+            detail="Копилка одобренных пуста. Одобрите замечания или снимите «только одобренные».",
+        )
+
+    docx_bytes = build_disagreement_protocol(
+        document_title=document.title if document else "Договор",
+        company_name=company.name if company else "Компания",
+        completed_at=task.completed_at,
+        findings=findings,
+        our_party_label=our_party_label,
+        their_party_label=their_party_label,
+        review_position=task.review_position,
+        include_our_comments=include_our_comments,
+    )
+
+    base_name = (document.title.rsplit(".", 1)[0] if document else "договор").strip() or "договор"
+    filename = f"Протокол_разногласий_{base_name}.docx"
+
+    return StreamingResponse(
+        BytesIO(docx_bytes),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={
+            "Content-Disposition": (
+                f"attachment; filename=\"disagreement_protocol.docx\"; filename*=UTF-8''{quote(filename)}"
+            )
+        },
+    )
+
+
+@router.get("/{task_id}/export-revised")
+async def export_revised_edition(
+    task_id: uuid.UUID,
+    company_id: uuid.UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    only_approved: bool = True,
+    save_to_archive: bool = False,
+):
+    """Apply suggested revisions into the source .docx and download the new edition."""
+    await _verify_company_access(db, user.id, company_id)
+
+    result = await db.execute(
+        select(DocumentTask)
+        .options(selectinload(DocumentTask.result))
+        .where(DocumentTask.id == task_id, DocumentTask.company_id == company_id)
+    )
+    task = result.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=404, detail="Задача не найдена")
+    if task.status != TaskStatus.completed:
+        raise HTTPException(status_code=400, detail="Проверка ещё не завершена")
+
+    document = await db.get(Document, task.document_id)
+    version_result = await db.execute(
+        select(DocumentVersion)
+        .where(DocumentVersion.document_id == task.document_id)
+        .order_by(DocumentVersion.version_number.desc())
+        .limit(1)
+    )
+    version = version_result.scalar_one_or_none()
+    if not version:
+        raise HTTPException(status_code=404, detail="Файл договора не найден")
+
+    if not _is_docx_document(document, version.storage_path):
+        raise HTTPException(
+            status_code=400,
+            detail="Новая редакция доступна только для исходников .docx. "
+            "Загрузите договор в формате Word.",
+        )
+
+    file_path = settings.upload_path / version.storage_path
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Файл отсутствует на диске")
+
+    data = (task.result.result_json or {}) if task.result else {}
+    findings = findings_for_annotated_export(data, only_approved=only_approved)
+    applicable = [f for f in findings if (f.get("suggested_revision") or "").strip()]
+    if only_approved and not applicable:
+        raise HTTPException(
+            status_code=400,
+            detail="Нет одобренных правок с текстом редакции. Одобрите замечания с suggested_revision "
+            "или снимите «только одобренные».",
+        )
+    if not applicable:
+        raise HTTPException(status_code=400, detail="Нет правок с текстом редакции для применения")
+
+    try:
+        docx_bytes, stats = apply_revisions_to_docx(file_path, applicable)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Не удалось сформировать новую редакцию: {e}") from e
+
+    base_name = (document.title.rsplit(".", 1)[0] if document else "договор").strip() or "договор"
+    filename = f"Новая_редакция_{base_name}.docx"
+
+    if save_to_archive:
+        parsed_preview = (
+            f"Новая редакция по проверке {task_id}: применено {stats.get('applied', 0)}, "
+            f"без привязки {stats.get('unmatched', 0)}"
+        )
+        await store_generated_docx(
+            db,
+            user_id=user.id,
+            company_id=company_id,
+            filename=filename,
+            docx_bytes=docx_bytes,
+            parsed_text=parsed_preview,
+        )
+
+    return StreamingResponse(
+        BytesIO(docx_bytes),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={
+            "Content-Disposition": (
+                f"attachment; filename=\"revised_edition.docx\"; filename*=UTF-8''{quote(filename)}"
+            ),
+            "X-LexForge-Applied": str(stats.get("applied", 0)),
+            "X-LexForge-Unmatched": str(stats.get("unmatched", 0)),
         },
     )

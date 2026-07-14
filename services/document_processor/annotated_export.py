@@ -15,6 +15,7 @@ from docx.opc.part import Part
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.oxml.parser import parse_xml
+from docx.shared import Pt
 from lxml import etree
 
 from services.document_processor.exporter import SEVERITY_LABELS
@@ -48,22 +49,61 @@ def _normalize(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").strip().lower())
 
 
-def _comment_body(finding: dict, index: int, author: str) -> str:
-    severity = finding.get("severity") or "medium"
-    sev_label = SEVERITY_LABELS.get(severity, severity)
-    clause = (finding.get("clause_ref") or f"Замечание {index}").strip()
-    rationale = (finding.get("rationale") or "").strip()
-    suggested = (finding.get("suggested_revision") or "").strip()
-    issue_type = (finding.get("issue_type") or "").strip()
+DEFAULT_AUTHOR = "Юрист компании"
+AI_DISCLAIMER = "(сформировано LexForge AI, требует проверки)"
 
-    lines = [f"[{sev_label}] {clause}"]
-    if issue_type:
-        lines.append(f"Тип: {issue_type}")
-    if rationale:
-        lines.append(rationale)
-    if suggested:
-        lines.append(f"Правка: {suggested}")
-    lines.append(f"— {author} (сформировано LexForge AI, требует проверки)")
+ISSUE_TYPE_LABELS = {
+    "errors": "ошибки",
+    "risks": "риски",
+    "financial": "финансы",
+    "compliance": "compliance",
+    "cascade_gap": "каскадный разрыв",
+}
+
+
+def _comment_body(
+    finding: dict,
+    index: int,
+    author: str,
+    *,
+    include_metadata: bool = False,
+    include_ai_disclaimer: bool = False,
+) -> str | None:
+    """Counterparty-facing comment: only the proposed wording (no internal risk rationale).
+
+    Returns None if there is no suggested_revision — such findings are skipped in annotated export.
+    Distinguishes «дополнить» vs «изложить в редакции» via revision_action.
+    """
+    from services.ai_orchestrator.review_findings import (
+        normalize_revision_action,
+        revision_proposal_phrase,
+    )
+
+    clause = (finding.get("clause_ref") or f"п. {index}").strip()
+    suggested = (finding.get("suggested_revision") or "").strip()
+    if not suggested:
+        return None
+
+    action = normalize_revision_action(finding)
+    proposal = revision_proposal_phrase(clause, suggested, action)
+
+    lines: list[str] = []
+    if include_metadata:
+        severity = finding.get("severity") or "medium"
+        sev_label = SEVERITY_LABELS.get(severity, severity)
+        lines.append(f"[{sev_label}] {clause}")
+        issue_type = (finding.get("issue_type") or "").strip()
+        if issue_type:
+            type_label = ISSUE_TYPE_LABELS.get(issue_type, issue_type)
+            lines.append(f"Тип: {type_label}")
+        action_label = "дополнить" if action == "supplement" else "изложить в новой редакции"
+        lines.append(f"Вид правки: {action_label}")
+
+    lines.append(proposal)
+
+    if include_ai_disclaimer:
+        lines.append(f"— {author} {AI_DISCLAIMER}")
+
     return "\n".join(lines)
 
 
@@ -182,11 +222,25 @@ def _attach_comment_to_paragraph(paragraph, comment_id: int) -> None:
             pass
 
 
+def _add_plain_heading(doc: DocxDocument, text: str) -> None:
+    """Add a bold paragraph without relying on built-in Heading styles.
+
+    Some uploaded contracts strip or customize styles; python-docx's add_heading
+    then fails with KeyError / ValueError: no style with name 'Heading 1'.
+    """
+    p = doc.add_paragraph()
+    run = p.add_run(text)
+    run.bold = True
+    run.font.size = Pt(14)
+
+
 def annotate_docx_with_comments(
     source: Path | str | bytes,
     findings: list[dict],
     *,
     author: str | None = None,
+    include_metadata: bool = False,
+    include_ai_disclaimer: bool = False,
 ) -> tuple[bytes, dict]:
     """Return annotated docx bytes and stats: {matched, unmatched}."""
     author_name = (author or "").strip() or DEFAULT_AUTHOR
@@ -207,6 +261,16 @@ def annotate_docx_with_comments(
     unmatched: list[dict] = []
 
     for i, finding in enumerate(findings, start=1):
+        body = _comment_body(
+            finding,
+            i,
+            author_name,
+            include_metadata=include_metadata,
+            include_ai_disclaimer=include_ai_disclaimer,
+        )
+        if body is None:
+            continue
+
         quote = (finding.get("original_text") or "").strip()
         para = _find_paragraph(doc, quote, used) if quote else None
         if para is None:
@@ -217,7 +281,6 @@ def annotate_docx_with_comments(
             unmatched.append(finding)
             continue
 
-        body = _comment_body(finding, i, author_name)
         _add_comment_element(
             comments_elm,
             next_id,
@@ -232,23 +295,23 @@ def annotate_docx_with_comments(
 
     if unmatched:
         doc.add_page_break()
-        doc.add_heading("Замечания без привязки к тексту", level=1)
+        _add_plain_heading(doc, "Предложения без привязки к тексту")
         doc.add_paragraph(
-            "Ниже — findings, для которых не удалось однозначно найти цитату в исходном .docx. "
-            "Они всё равно включены в заключение."
+            "Ниже — правки, для которых не удалось однозначно найти цитату в исходном .docx."
         )
         for i, f in enumerate(unmatched, start=1):
+            proposal = _comment_body(
+                f,
+                i,
+                author_name,
+                include_metadata=include_metadata,
+                include_ai_disclaimer=include_ai_disclaimer,
+            )
+            if not proposal:
+                continue
             p = doc.add_paragraph()
-            title = (f.get("clause_ref") or f"Замечание {i}").strip()
-            sev = SEVERITY_LABELS.get(f.get("severity") or "medium", f.get("severity") or "")
-            run = p.add_run(f"{i}. [{sev}] {title}")
-            run.bold = True
-            if f.get("original_text"):
-                doc.add_paragraph(f"Цитата ИИ: «{f['original_text']}»")
-            if f.get("rationale"):
-                doc.add_paragraph(f["rationale"])
-            if f.get("suggested_revision"):
-                doc.add_paragraph(f"Правка: {f['suggested_revision']}")
+            run = p.add_run(proposal)
+            run.bold = False
 
     comments_part._blob = etree.tostring(comments_elm, xml_declaration=True, encoding="UTF-8", standalone=True)
 

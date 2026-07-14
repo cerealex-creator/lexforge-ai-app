@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useEffect } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -21,9 +21,29 @@ type FormData = z.infer<typeof schema>;
 
 export default function LoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const setAuth = useAuthStore((s) => s.setAuth);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (searchParams.get("expired") === "1") {
+      setNotice("Сессия истекла. Войдите снова.");
+    }
+    fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/health`)
+      .then((r) => r.json())
+      .then((h) => {
+        if (h.database === false) {
+          setNotice(
+            "PostgreSQL не запущен. Запустите Docker Desktop, затем в терминале: make up",
+          );
+        }
+      })
+      .catch(() => {
+        setNotice("API не отвечает. Запустите в терминале: make api");
+      });
+  }, [searchParams]);
 
   const { register, handleSubmit, formState: { errors } } = useForm<FormData>({
     resolver: zodResolver(schema),
@@ -38,7 +58,13 @@ export default function LoginPage() {
       setAuth(res.access_token, res.user, res.companies);
       router.push("/dashboard");
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Ошибка входа");
+      setError(
+        e instanceof ApiError
+          ? e.message
+          : e instanceof Error
+            ? e.message
+            : "Ошибка входа",
+      );
     } finally {
       setLoading(false);
     }
@@ -70,6 +96,9 @@ export default function LoginPage() {
               <Input type="password" {...register("password")} />
               {errors.password && <p className="mt-1 text-xs text-red-600">{errors.password.message}</p>}
             </div>
+            {notice && (
+              <div className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">{notice}</div>
+            )}
             {error && (
               <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>
             )}

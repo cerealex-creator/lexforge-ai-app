@@ -1,13 +1,14 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { AuthGuard } from "@/components/auth-guard";
 import { AppShell } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { DocumentPicker, type DocumentPick } from "@/components/document-picker";
 import { useActiveCompany, useAuthStore } from "@/lib/store";
-import { ApiError, contractApi } from "@/lib/api";
+import { ApiError, contractApi, documentApi, reviewApi, type DocumentListItem } from "@/lib/api";
 import {
   CONTRACT_TYPES,
   buildInitialValues,
@@ -15,6 +16,7 @@ import {
   isFormValid,
   type FormField,
 } from "@/lib/contract-templates";
+import { cn } from "@/lib/utils";
 import { FileText, Loader2, Wand2 } from "lucide-react";
 
 export default function ContractCreatePage() {
@@ -25,16 +27,23 @@ export default function ContractCreatePage() {
   );
 }
 
+type CreateMode = "scratch" | "from_existing";
+
 function ContractCreatePageContent() {
   const token = useAuthStore((s) => s.token)!;
   const company = useActiveCompany();
 
+  const [mode, setMode] = useState<CreateMode>("scratch");
   const [typeId, setTypeId] = useState("supply");
   const [positionId, setPositionId] = useState("supplier");
   const [title, setTitle] = useState("Договор поставки");
   const [values, setValues] = useState<Record<string, string>>(() =>
     buildInitialValues("supply", "supplier"),
   );
+
+  const [documentPick, setDocumentPick] = useState<DocumentPick | null>(null);
+  const [archiveDocs, setArchiveDocs] = useState<DocumentListItem[]>([]);
+  const [modifications, setModifications] = useState("");
 
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -43,16 +52,24 @@ function ContractCreatePageContent() {
   const contractType = getContractType(typeId);
   const position = contractType.positions.find((p) => p.id === positionId) ?? contractType.positions[0];
 
+  useEffect(() => {
+    if (!company) return;
+    documentApi
+      .list(token, company.id)
+      .then(setArchiveDocs)
+      .catch(() => setArchiveDocs([]));
+  }, [token, company]);
+
   const applyTypeAndPosition = useCallback((nextTypeId: string, nextPositionId: string) => {
     const type = getContractType(nextTypeId);
     const pos = type.positions.find((p) => p.id === nextPositionId) ?? type.positions[0];
     setTypeId(nextTypeId);
     setPositionId(pos.id);
-    setTitle(type.titleDefault);
+    setTitle(mode === "from_existing" ? `${type.titleDefault}_новая_редакция` : type.titleDefault);
     setValues(buildInitialValues(nextTypeId, pos.id));
     setResult(null);
     setError(null);
-  }, []);
+  }, [mode]);
 
   const handleTypeChange = (nextTypeId: string) => {
     const type = getContractType(nextTypeId);
@@ -65,6 +82,15 @@ function ContractCreatePageContent() {
 
   const setField = (key: string, value: string) => {
     setValues((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const switchMode = (next: CreateMode) => {
+    setMode(next);
+    setResult(null);
+    setError(null);
+    if (next === "from_existing") {
+      setTitle((t) => (t.includes("новая_редакция") ? t : `${t}_новая_редакция`));
+    }
   };
 
   const generate = async () => {
@@ -89,6 +115,40 @@ function ContractCreatePageContent() {
     }
   };
 
+  const revise = async () => {
+    if (!company || !documentPick) return;
+    if (modifications.trim().length < 3) {
+      setError("Опишите, какие изменения внести в договор");
+      return;
+    }
+    setGenerating(true);
+    setError(null);
+    setResult(null);
+    try {
+      let sourceId: string;
+      if (documentPick.source === "archive") {
+        sourceId = documentPick.documentId;
+      } else {
+        const uploaded = await reviewApi.uploadDocument(token, company.id, documentPick.file);
+        sourceId = uploaded.id;
+      }
+      const res = await contractApi.revise(token, {
+        company_id: company.id,
+        company_name: company.name,
+        source_document_id: sourceId,
+        modifications: modifications.trim(),
+        title,
+        our_position: position.label,
+        contract_type: contractType.label,
+      });
+      setResult(res);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Не удалось создать новую редакцию");
+    } finally {
+      setGenerating(false);
+    }
+  };
+
   if (!company) {
     return (
       <AppShell>
@@ -108,17 +168,40 @@ function ContractCreatePageContent() {
           <h1 className="text-2xl font-bold text-slate-900">Создание договора</h1>
         </div>
         <p className="text-sm text-slate-500">
-          {company.name} — выберите тип и позицию, заполните вводные; LexForge соберёт проект и сохранит в картотеку
+          {company.name} — с нуля по вводным или на основе существующего договора с правками
         </p>
       </div>
 
       {error && <div className="mb-4 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
 
+      <div className="mb-4 flex gap-1 rounded-lg bg-slate-100 p-1">
+        <button
+          type="button"
+          onClick={() => switchMode("scratch")}
+          className={cn(
+            "flex-1 rounded-md px-3 py-2 text-sm font-medium transition",
+            mode === "scratch" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900",
+          )}
+        >
+          С нуля
+        </button>
+        <button
+          type="button"
+          onClick={() => switchMode("from_existing")}
+          className={cn(
+            "flex-1 rounded-md px-3 py-2 text-sm font-medium transition",
+            mode === "from_existing" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900",
+          )}
+        >
+          На основе существующего
+        </button>
+      </div>
+
       <Card>
         <CardHeader>
           <h2 className="font-semibold text-slate-900">Тип и позиция</h2>
           <p className="text-xs text-slate-500">
-            Поля и подсказки меняются в зависимости от типа договора и вашей роли в сделке
+            Подсказки учитывают вашу роль в сделке
           </p>
         </CardHeader>
         <CardContent className="grid gap-4 sm:grid-cols-2">
@@ -152,33 +235,85 @@ function ContractCreatePageContent() {
         </CardContent>
       </Card>
 
-      <Card className="mt-4">
-        <CardHeader>
-          <h2 className="font-semibold text-slate-900">Вводные данные</h2>
-          <p className="text-xs text-slate-500">Чем точнее вводные, тем меньше правок после генерации</p>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <Field label="Название (для файла)" value={title} onChange={setTitle} placeholder="Договор №..." />
-          {contractType.fields.map((field) => (
-            <DynamicField
-              key={field.key}
-              field={field}
-              value={values[field.key] ?? ""}
-              onChange={(v) => setField(field.key, v)}
-            />
-          ))}
+      {mode === "scratch" ? (
+        <Card className="mt-4">
+          <CardHeader>
+            <h2 className="font-semibold text-slate-900">Вводные данные</h2>
+            <p className="text-xs text-slate-500">Чем точнее вводные, тем меньше правок после генерации</p>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <Field label="Название (для файла)" value={title} onChange={setTitle} placeholder="Договор №..." />
+            {contractType.fields.map((field) => (
+              <DynamicField
+                key={field.key}
+                field={field}
+                value={values[field.key] ?? ""}
+                onChange={(v) => setField(field.key, v)}
+              />
+            ))}
 
-          <div className="flex flex-wrap gap-3">
-            <Button disabled={generating || !isFormValid(typeId, values)} onClick={generate}>
-              {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
-              <span className="ml-1.5">Сгенерировать и сохранить</span>
-            </Button>
-            <Link href="/documents">
-              <Button variant="secondary">Картотека</Button>
-            </Link>
-          </div>
-        </CardContent>
-      </Card>
+            <div className="flex flex-wrap gap-3">
+              <Button disabled={generating || !isFormValid(typeId, values)} onClick={generate}>
+                {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
+                <span className="ml-1.5">Сгенерировать и сохранить</span>
+              </Button>
+              <Link href="/documents">
+                <Button variant="secondary">Картотека</Button>
+              </Link>
+            </div>
+          </CardContent>
+        </Card>
+      ) : (
+        <Card className="mt-4">
+          <CardHeader>
+            <h2 className="font-semibold text-slate-900">Исходный договор и изменения</h2>
+            <p className="text-xs text-slate-500">
+              LexForge подготовит новую редакцию с учётом ваших правок и сохранит её в картотеку
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <DocumentPicker
+              label="Базовый договор"
+              value={documentPick}
+              onChange={setDocumentPick}
+              documents={archiveDocs}
+            />
+            <Field
+              label="Название новой редакции (файл)"
+              value={title}
+              onChange={setTitle}
+              placeholder="Договор_новая_редакция"
+            />
+            <div>
+              <p className="mb-1 text-sm font-medium text-slate-700">Какие изменения внести</p>
+              <textarea
+                value={modifications}
+                onChange={(e) => setModifications(e.target.value)}
+                rows={6}
+                placeholder={
+                  "Например:\n" +
+                  "— срок оплаты сократить до 15 банковских дней;\n" +
+                  "— добавить право приостановки работ при просрочке оплаты;\n" +
+                  "— лимит ответственности ограничить 10% цены договора."
+                }
+                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20"
+              />
+            </div>
+            <div className="flex flex-wrap gap-3">
+              <Button
+                disabled={generating || !documentPick || modifications.trim().length < 3}
+                onClick={revise}
+              >
+                {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
+                <span className="ml-1.5">Создать новую редакцию</span>
+              </Button>
+              <Link href="/documents">
+                <Button variant="secondary">Картотека</Button>
+              </Link>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {result && (
         <Card className="mt-6">
@@ -219,7 +354,7 @@ function SelectField({
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20"
+        className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20"
       >
         {options.map((o) => (
           <option key={o.value} value={o.value}>
@@ -228,35 +363,6 @@ function SelectField({
         ))}
       </select>
     </div>
-  );
-}
-
-function DynamicField({
-  field,
-  value,
-  onChange,
-}: {
-  field: FormField;
-  value: string;
-  onChange: (v: string) => void;
-}) {
-  if (field.kind === "textarea") {
-    return (
-      <Textarea
-        label={field.label + (field.required ? " *" : "")}
-        value={value}
-        onChange={onChange}
-        placeholder={field.placeholder}
-      />
-    );
-  }
-  return (
-    <Field
-      label={field.label + (field.required ? " *" : "")}
-      value={value}
-      onChange={onChange}
-      placeholder={field.placeholder}
-    />
   );
 }
 
@@ -273,37 +379,58 @@ function Field({
 }) {
   return (
     <div>
-      <p className="text-sm font-medium text-slate-700">{label}</p>
+      <p className="mb-1 text-sm font-medium text-slate-700">{label}</p>
       <input
+        type="text"
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-brand-200"
+        className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20"
       />
     </div>
   );
 }
 
-function Textarea({
-  label,
+function DynamicField({
+  field,
   value,
   onChange,
-  placeholder,
 }: {
-  label: string;
+  field: FormField;
   value: string;
   onChange: (v: string) => void;
-  placeholder?: string;
 }) {
+  if (field.multiline) {
+    return (
+      <div>
+        <p className="mb-1 text-sm font-medium text-slate-700">
+          {field.label}
+          {field.required ? "" : " (опц.)"}
+        </p>
+        {field.hint && <p className="mb-1 text-xs text-slate-500">{field.hint}</p>}
+        <textarea
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          rows={3}
+          placeholder={field.placeholder}
+          className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20"
+        />
+      </div>
+    );
+  }
   return (
     <div>
-      <p className="text-sm font-medium text-slate-700">{label}</p>
-      <textarea
+      <p className="mb-1 text-sm font-medium text-slate-700">
+        {field.label}
+        {field.required ? "" : " (опц.)"}
+      </p>
+      {field.hint && <p className="mb-1 text-xs text-slate-500">{field.hint}</p>}
+      <input
+        type="text"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        rows={3}
-        className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-brand-200"
+        placeholder={field.placeholder}
+        className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20"
       />
     </div>
   );

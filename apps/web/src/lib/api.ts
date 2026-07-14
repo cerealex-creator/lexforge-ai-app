@@ -22,6 +22,8 @@ export interface AuthResponse {
   companies: Company[];
 }
 
+import { handleSessionExpired } from "./store";
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -51,6 +53,15 @@ function formatApiDetail(detail: unknown): string {
 
 function formatHttpError(status: number, statusText: string, detail: unknown): string {
   const msg = formatApiDetail(detail);
+  if (status === 401) {
+    return msg === "Недействительный токен" || !msg
+      ? "Сессия истекла или недействительна. Войдите снова."
+      : msg;
+  }
+  if (status === 503 || status === 500) {
+    if (msg && msg !== "Ошибка запроса" && msg !== "Internal Server Error") return msg;
+    return "База данных недоступна. Запустите Docker Desktop, затем в терминале: make up";
+  }
   if (status === 404) {
     return `${msg || statusText}. Перезапустите backend: make api (нужна версия с модулем проверки договоров)`;
   }
@@ -60,14 +71,26 @@ function formatHttpError(status: number, statusText: string, detail: unknown): s
   return msg || statusText;
 }
 
+async function readErrorDetail(res: Response): Promise<unknown> {
+  const text = await res.text();
+  if (!text) return undefined;
+  try {
+    const data = JSON.parse(text) as { detail?: unknown };
+    return data.detail ?? text;
+  } catch {
+    return text;
+  }
+}
+
 async function deleteRequest(path: string, token: string): Promise<void> {
   const res = await fetch(`${API_URL}${path}`, {
     method: "DELETE",
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new ApiError(res.status, formatHttpError(res.status, res.statusText, data.detail));
+    const detail = await readErrorDetail(res);
+    if (res.status === 401) handleSessionExpired();
+    throw new ApiError(res.status, formatHttpError(res.status, res.statusText, detail));
   }
 }
 
@@ -84,8 +107,9 @@ async function request<T>(
 
   const res = await fetch(`${API_URL}${path}`, { ...options, headers });
   if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new ApiError(res.status, formatHttpError(res.status, res.statusText, data.detail));
+    const detail = await readErrorDetail(res);
+    if (res.status === 401 && token) handleSessionExpired();
+    throw new ApiError(res.status, formatHttpError(res.status, res.statusText, detail));
   }
   return res.json();
 }
@@ -126,24 +150,40 @@ export interface UploadedDocument {
 }
 
 export interface Finding {
+  id?: string | null;
   clause_ref: string;
   original_text: string;
   issue_type: string;
   severity: string;
   suggested_revision?: string | null;
+  /** restate = full rewrite; supplement = add text without replacing the clause */
+  revision_action?: "restate" | "supplement" | string | null;
   rationale: string;
+  upstream_clause?: string | null;
+  downstream_clause?: string | null;
+  gap_summary?: string | null;
+  status?: "new" | "revised" | "deferred" | "from_vault" | "dismissed" | string | null;
+  lawyer_note?: string | null;
+  previous_suggested_revision?: string | null;
+  previous_rationale?: string | null;
 }
 
 export interface ReviewResult {
   risk_score?: number | null;
   risk_rationale?: string | null;
   findings: Finding[];
+  approved_vault?: Finding[];
+  dismissed_findings?: Finding[];
   multi_agent?: boolean;
   agents?: { agent: string; risk_score: number; findings_count: number }[];
   refined_from?: string | null;
   refine_scope?: string | null;
   accepted_count?: number | null;
+  revised_count?: number | null;
   new_count?: number | null;
+  deferred_count?: number | null;
+  dismissed_count?: number | null;
+  cascade_analysis?: boolean | null;
 }
 
 export interface ReviewListItem {
@@ -176,6 +216,9 @@ export interface ReviewTask {
   result?: ReviewResult | null;
   parent_task_id?: string | null;
   refine_scope?: string | null;
+  project_id?: string | null;
+  cascade_analysis?: boolean;
+  upstream_document_id?: string | null;
 }
 
 async function uploadFile<T>(
@@ -190,6 +233,7 @@ async function uploadFile<T>(
   });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
+    if (res.status === 401) handleSessionExpired();
     throw new ApiError(res.status, formatHttpError(res.status, res.statusText, data.detail));
   }
   return res.json();
@@ -270,6 +314,24 @@ export const contractApi = {
   ) =>
     request<{ document_id: string; markdown: string }>(
       "/api/v1/contracts/generate",
+      { method: "POST", body: JSON.stringify(body) },
+      token,
+    ),
+
+  revise: (
+    token: string,
+    body: {
+      company_id: string;
+      company_name?: string;
+      source_document_id: string;
+      modifications: string;
+      title?: string;
+      our_position?: string;
+      contract_type?: string;
+    },
+  ) =>
+    request<{ document_id: string; markdown: string }>(
+      "/api/v1/contracts/revise",
       { method: "POST", body: JSON.stringify(body) },
       token,
     ),
@@ -650,7 +712,10 @@ export const reviewApi = {
       accepted_findings?: Finding[];
       finding_feedback?: { finding: Finding; note: string }[];
       lawyer_notes?: string;
+      dismissed_findings?: Finding[];
       project_id?: string;
+      cascade_analysis?: boolean;
+      upstream_document_id?: string;
     },
   ) =>
     request<ReviewTask>("/api/v1/reviews", {
@@ -683,12 +748,85 @@ export const reviewApi = {
     token: string,
     taskId: string,
     companyId: string,
-    commentAuthor?: string,
+    options?: {
+      commentAuthor?: string;
+      includeMetadata?: boolean;
+      includeAiDisclaimer?: boolean;
+      onlyApproved?: boolean;
+    },
   ): Promise<Blob> => {
     const params = new URLSearchParams({ company_id: companyId });
-    if (commentAuthor?.trim()) params.set("comment_author", commentAuthor.trim());
+    if (options?.commentAuthor?.trim()) params.set("comment_author", options.commentAuthor.trim());
+    if (options?.includeMetadata) params.set("include_metadata", "true");
+    if (options?.includeAiDisclaimer) params.set("include_ai_disclaimer", "true");
+    if (options?.onlyApproved === false) params.set("only_approved", "false");
+    else params.set("only_approved", "true");
     const res = await fetch(
       `${API_URL}/api/v1/reviews/${taskId}/export-annotated?${params}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new ApiError(res.status, formatHttpError(res.status, res.statusText, data.detail));
+    }
+    return res.blob();
+  },
+
+  approveFindings: (token: string, taskId: string, companyId: string, findings: Finding[]) =>
+    request<ReviewTask>(`/api/v1/reviews/${taskId}/approve`, {
+      method: "POST",
+      body: JSON.stringify({ company_id: companyId, findings }),
+    }, token),
+
+  dismissFindings: (token: string, taskId: string, companyId: string, findings: Finding[]) =>
+    request<ReviewTask>(`/api/v1/reviews/${taskId}/dismiss`, {
+      method: "POST",
+      body: JSON.stringify({ company_id: companyId, findings }),
+    }, token),
+
+  exportDisagreementProtocol: async (
+    token: string,
+    taskId: string,
+    companyId: string,
+    options?: {
+      onlyApproved?: boolean;
+      includeOurComments?: boolean;
+      ourPartyLabel?: string;
+      theirPartyLabel?: string;
+    },
+  ): Promise<Blob> => {
+    const params = new URLSearchParams({ company_id: companyId });
+    if (options?.onlyApproved === false) params.set("only_approved", "false");
+    else params.set("only_approved", "true");
+    if (options?.includeOurComments === false) params.set("include_our_comments", "false");
+    if (options?.ourPartyLabel?.trim()) params.set("our_party_label", options.ourPartyLabel.trim());
+    if (options?.theirPartyLabel?.trim()) params.set("their_party_label", options.theirPartyLabel.trim());
+    const res = await fetch(
+      `${API_URL}/api/v1/reviews/${taskId}/export-protocol?${params}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new ApiError(res.status, formatHttpError(res.status, res.statusText, data.detail));
+    }
+    return res.blob();
+  },
+
+  exportRevisedEdition: async (
+    token: string,
+    taskId: string,
+    companyId: string,
+    options?: {
+      onlyApproved?: boolean;
+      saveToArchive?: boolean;
+    },
+  ): Promise<Blob> => {
+    const params = new URLSearchParams({ company_id: companyId });
+    if (options?.onlyApproved === false) params.set("only_approved", "false");
+    else params.set("only_approved", "true");
+    if (options?.saveToArchive) params.set("save_to_archive", "true");
+    const res = await fetch(
+      `${API_URL}/api/v1/reviews/${taskId}/export-revised?${params}`,
       { headers: { Authorization: `Bearer ${token}` } },
     );
     if (!res.ok) {
@@ -740,6 +878,7 @@ export interface ComparisonTask {
   created_at: string;
   completed_at?: string | null;
   result?: ComparisonResult | null;
+  project_id?: string | null;
 }
 
 export const comparisonApi = {
@@ -818,24 +957,12 @@ export interface PromptItem {
   content: string;
   is_customized: boolean;
   updated_at?: string | null;
+  editable?: boolean;
 }
 
+/** Read-only listing. Prompt editing via API is disabled (410). */
 export const promptApi = {
   list: (token: string) => request<PromptItem[]>("/api/v1/prompts", {}, token),
-
-  update: (token: string, key: string, content: string) =>
-    request<PromptItem>(
-      `/api/v1/prompts/${encodeURIComponent(key)}`,
-      { method: "PUT", body: JSON.stringify({ content }) },
-      token,
-    ),
-
-  reset: (token: string, key: string) =>
-    request<PromptItem>(
-      `/api/v1/prompts/${encodeURIComponent(key)}/reset`,
-      { method: "POST" },
-      token,
-    ),
 };
 
 export type ProjectKind = "contract" | "litigation" | "consulting";

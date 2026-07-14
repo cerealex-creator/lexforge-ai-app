@@ -18,6 +18,11 @@ import {
 } from "@/lib/api";
 import { InfoTip } from "@/components/info-tip";
 import { ToolPanel } from "@/components/tool-panel";
+import { DueDiligenceGuide } from "@/components/due-diligence-guide";
+import {
+  ProjectContextFields,
+  type ProjectContextValues,
+} from "@/components/project-context-fields";
 import {
   contractEmbeddedTools,
   sectionByProjectKind,
@@ -25,7 +30,7 @@ import {
   type ProjectKindNav,
 } from "@/lib/navigation";
 import { cn } from "@/lib/utils";
-import { Brain, Loader2, Save, ShieldAlert, Upload } from "lucide-react";
+import { Brain, Loader2, Save, ShieldAlert, Trash2, Upload } from "lucide-react";
 
 type MemoryItem = {
   clause_ref?: string;
@@ -45,15 +50,14 @@ type ProjectMemory = {
   updated_at?: string | null;
 };
 
-const STAGES: { id: ProjectStage; label: string }[] = [
-  { id: "preliminary", label: "Предварительный" },
-  { id: "first_deal", label: "Первая сделка" },
-  { id: "repeat", label: "Повторная" },
-  { id: "addendum", label: "Доп. соглашение" },
-  { id: "renewal", label: "Пролонгация" },
-  { id: "dispute", label: "Спор" },
-  { id: "other", label: "Иное" },
-];
+const EMPTY_MEMORY: ProjectMemory = {
+  open_risks: [],
+  accepted_positions: [],
+  concessions: [],
+  closed_issues: [],
+  notes: [],
+  updated_at: null,
+};
 
 const ROLE_LABEL: Record<string, string> = {
   ours: "Наша",
@@ -92,6 +96,9 @@ function ProjectDetailContent() {
   const [kadNotes, setKadNotes] = useState("");
   const [judicialSummary, setJudicialSummary] = useState("");
   const [mediaNotes, setMediaNotes] = useState("");
+  const [showDdGuide, setShowDdGuide] = useState(false);
+  const [memoryDraft, setMemoryDraft] = useState("");
+  const [savingMemory, setSavingMemory] = useState(false);
 
   const load = useCallback(() => {
     if (!company) return;
@@ -108,6 +115,7 @@ function ProjectDetailContent() {
         setJudicialSummary(jp.summary || "");
         setKadNotes(jp.kad_notes || "");
         setMediaNotes(jp.media_notes || "");
+        setMemoryDraft(JSON.stringify(p.memory_json || EMPTY_MEMORY, null, 2));
       })
       .catch((e) => setError(e instanceof ApiError ? e.message : "Не удалось загрузить проект"));
   }, [token, company, projectId]);
@@ -134,6 +142,60 @@ function ProjectDetailContent() {
     } finally {
       setSaving(false);
     }
+  };
+
+  const saveMemory = async () => {
+    if (!company || !project) return;
+    setSavingMemory(true);
+    setError(null);
+    try {
+      const parsed = JSON.parse(memoryDraft) as Record<string, unknown>;
+      const updated = await projectApi.update(token, project.id, company.id, {
+        memory_json: parsed,
+      });
+      setProject(updated);
+      setMemoryDraft(JSON.stringify(updated.memory_json || EMPTY_MEMORY, null, 2));
+    } catch (e) {
+      setError(
+        e instanceof SyntaxError
+          ? "Некорректный JSON памяти"
+          : e instanceof ApiError
+            ? e.message
+            : "Не удалось сохранить память",
+      );
+    } finally {
+      setSavingMemory(false);
+    }
+  };
+
+  const clearMemory = async () => {
+    if (!company || !project) return;
+    if (!confirm("Очистить память проекта? Открытые риски, уступки и заметки будут сброшены.")) return;
+    setSavingMemory(true);
+    setError(null);
+    try {
+      const cleared = {
+        ...EMPTY_MEMORY,
+        updated_at: new Date().toISOString(),
+      };
+      const updated = await projectApi.update(token, project.id, company.id, {
+        memory_json: cleared,
+      });
+      setProject(updated);
+      setMemoryDraft(JSON.stringify(cleared, null, 2));
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Не удалось очистить память");
+    } finally {
+      setSavingMemory(false);
+    }
+  };
+
+  const onContextChange = (patch: Partial<ProjectContextValues>) => {
+    if (patch.counterpartyName !== undefined) setCounterpartyName(patch.counterpartyName);
+    if (patch.counterpartyInn !== undefined) setCounterpartyInn(patch.counterpartyInn);
+    if (patch.stage !== undefined) setStage(patch.stage);
+    if (patch.specificity !== undefined) setSpecificity(patch.specificity);
+    if (patch.brief !== undefined) setBrief(patch.brief);
   };
 
   const saveJudicial = async () => {
@@ -347,60 +409,20 @@ function ProjectDetailContent() {
         <Card>
           <CardHeader className="flex flex-row items-center gap-2">
             <h2 className="font-semibold text-slate-800">Контекст для ИИ</h2>
-            <InfoTip text="Заполняется по желанию: этап, специфика и бриф улучшают качество ответов ИИ по этому делу." />
+            <InfoTip text="Заполняется по желанию: этап, специфика и бриф улучшают качество ответов ИИ по этому делу. Можно включить мини-опрос." />
           </CardHeader>
           <CardContent className="space-y-3">
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div>
-                <label className="mb-1 block text-xs font-medium text-slate-600">Контрагент</label>
-                <input
-                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
-                  value={counterpartyName}
-                  onChange={(e) => setCounterpartyName(e.target.value)}
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs font-medium text-slate-600">ИНН</label>
-                <input
-                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
-                  value={counterpartyInn}
-                  onChange={(e) => setCounterpartyInn(e.target.value)}
-                />
-              </div>
-            </div>
-            <div>
-              <label className="mb-1 block text-xs font-medium text-slate-600">Этап</label>
-              <select
-                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
-                value={stage}
-                onChange={(e) => setStage(e.target.value as ProjectStage | "")}
-              >
-                <option value="">—</option>
-                {STAGES.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="mb-1 block text-xs font-medium text-slate-600">Специфика</label>
-              <textarea
-                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
-                rows={3}
-                value={specificity}
-                onChange={(e) => setSpecificity(e.target.value)}
-              />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs font-medium text-slate-600">Бриф</label>
-              <textarea
-                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
-                rows={4}
-                value={brief}
-                onChange={(e) => setBrief(e.target.value)}
-              />
-            </div>
+            <ProjectContextFields
+              compactStages
+              values={{
+                counterpartyName,
+                counterpartyInn,
+                stage,
+                specificity,
+                brief,
+              }}
+              onChange={onContextChange}
+            />
             <Button size="sm" onClick={saveMeta} disabled={saving}>
               {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
               <span className="ml-1.5">Сохранить контекст</span>
@@ -418,9 +440,17 @@ function ProjectDetailContent() {
           </CardHeader>
           <CardContent className="space-y-3">
             <p className="text-xs text-slate-500">
-              Live-доступ к КАД пока не подключён: проверка даёт чеклист и заполняет профиль. Можно править вручную
-              (результаты КАД/СМИ).
+              Live-КАД не подключён: ИИ готовит чеклист и техники самостоятельного поиска; результаты вносите сюда
+              вручную.
             </p>
+            <button
+              type="button"
+              onClick={() => setShowDdGuide((v) => !v)}
+              className="text-xs font-medium text-brand-600 hover:underline"
+            >
+              {showDdGuide ? "Скрыть справочник ресурсов" : "Справочник: где и как проверить"}
+            </button>
+            {showDdGuide && <DueDiligenceGuide compact />}
             <div>
               <label className="mb-1 block text-xs font-medium text-slate-600">Сводка</label>
               <textarea
@@ -428,6 +458,7 @@ function ProjectDetailContent() {
                 rows={2}
                 value={judicialSummary}
                 onChange={(e) => setJudicialSummary(e.target.value)}
+                placeholder="Краткий вывод после самостоятельной проверки…"
               />
             </div>
             <div>
@@ -437,7 +468,7 @@ function ProjectDetailContent() {
                 rows={3}
                 value={kadNotes}
                 onChange={(e) => setKadNotes(e.target.value)}
-                placeholder="Частота споров, роль ответчика, ключевые дела…"
+                placeholder="kad.arbitr.ru по ИНН за 3–5 лет: частота споров, роль ответчика, банкротство…"
               />
             </div>
             <div>
@@ -447,6 +478,7 @@ function ProjectDetailContent() {
                 rows={2}
                 value={mediaNotes}
                 onChange={(e) => setMediaNotes(e.target.value)}
+                placeholder="Ссылки и выводы из открытого поиска / санкционных списков…"
               />
             </div>
             <Button size="sm" onClick={saveJudicial} disabled={saving}>
@@ -461,19 +493,28 @@ function ProjectDetailContent() {
       </div>
 
       <Card className="mt-6">
-        <CardHeader className="flex flex-row items-center gap-2">
+        <CardHeader className="flex flex-row flex-wrap items-center gap-2">
           <Brain className="h-4 w-4 text-slate-500" />
           <h2 className="font-semibold text-slate-800">Память проекта</h2>
           {memory.updated_at && (
-            <span className="ml-auto text-xs text-slate-400">
+            <span className="text-xs text-slate-400">
               обновлено {new Date(memory.updated_at).toLocaleString("ru-RU")}
             </span>
           )}
+          <div className="ml-auto flex flex-wrap gap-2">
+            <Button size="sm" variant="secondary" disabled={savingMemory} onClick={saveMemory}>
+              {savingMemory ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+              <span className="ml-1.5">Сохранить JSON</span>
+            </Button>
+            <Button size="sm" variant="secondary" disabled={savingMemory} onClick={clearMemory}>
+              <Trash2 className="h-3.5 w-3.5" />
+              <span className="ml-1.5">Очистить</span>
+            </Button>
+          </div>
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="text-xs text-slate-500">
-            Накапливается после проверок и сравнений: открытые риски, одобренные позиции, уступки. Подмешивается в
-            промпты ИИ, чтобы не начинать с нуля на каждой итерации.
+            Накапливается после проверок и сравнений. Можно править JSON вручную или очистить целиком.
           </p>
           {!hasMemory ? (
             <p className="text-sm text-slate-500">
@@ -520,6 +561,15 @@ function ProjectDetailContent() {
               )}
             </p>
           )}
+          <div>
+            <label className="mb-1 block text-xs font-medium text-slate-600">Редактирование (JSON)</label>
+            <textarea
+              className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-xs text-slate-700"
+              rows={8}
+              value={memoryDraft}
+              onChange={(e) => setMemoryDraft(e.target.value)}
+            />
+          </div>
         </CardContent>
       </Card>
 

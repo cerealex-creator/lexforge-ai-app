@@ -245,6 +245,7 @@ async def update_project(
         "specificity",
         "brief",
         "judicial_profile",
+        "memory_json",
     ):
         if field in data:
             setattr(project, field, data[field])

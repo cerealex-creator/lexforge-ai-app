@@ -44,8 +44,18 @@ export function SidebarRecentTasks() {
     if (!token || !company) return;
     activityApi
       .list(token, company.id, 10)
-      .then((d) => setItems(d.items))
-      .catch((e) => setError(e instanceof ApiError ? e.message : "Ошибка"));
+      .then((d) => {
+        setItems(d.items);
+        setError(null);
+      })
+      .catch((e) => {
+        // Keep previous items if we already have them; only show a load error.
+        const msg =
+          e instanceof ApiError
+            ? e.message
+            : "Не удалось обновить список задач";
+        setError(msg);
+      });
   }, [token, company]);
 
   useEffect(() => {
@@ -73,7 +83,15 @@ export function SidebarRecentTasks() {
 
       {open && (
         <>
-          {error && <p className="px-1 text-xs text-red-600">{error}</p>}
+          {error && (
+            <p className="mb-1 px-1 text-xs text-red-600" title={error}>
+              {items && items.length > 0
+                ? "Не удалось обновить список"
+                : error.length > 80
+                  ? `${error.slice(0, 80)}…`
+                  : error}
+            </p>
+          )}
           {!items && !error && (
             <div className="flex items-center gap-1.5 px-1 text-xs text-slate-400">
               <Loader2 className="h-3 w-3 animate-spin" />

@@ -17,6 +17,10 @@ sys.path.insert(0, str(ROOT))
 from apps.api.config import settings
 from packages.db.models import User, UserCompanyRole
 
+DB_UNAVAILABLE_MSG = (
+    "База данных недоступна. Запустите Docker Desktop, затем в терминале: make up"
+)
+
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 engine = create_async_engine(settings.database_url, echo=settings.app_debug)

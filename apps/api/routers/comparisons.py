@@ -60,6 +60,7 @@ def _task_to_out(task: ComparisonTask) -> ComparisonTaskOut:
         created_at=task.created_at,
         completed_at=task.completed_at,
         result=result_out,
+        project_id=task.project_id,
     )
 
 

@@ -103,7 +103,7 @@ export const legalWorkSections: NavSection[] = [
       {
         id: "contract-create",
         title: "Создание договора",
-        description: "Шаблоны, переменные, AI-формулировки",
+        description: "С нуля или на основе существующего с правками",
         href: "/contracts/create",
         phase: "Phase 3",
         enabled: true,
@@ -180,14 +180,6 @@ export function isWorkSectionId(value: string): value is WorkSectionId {
  * Вспомогательные функции — сайдбар «Настройки и сервисы».
  */
 export const auxiliaryTools: AuxiliaryItem[] = [
-  {
-    id: "prompts",
-    title: "Управление промптами",
-    description: "Настройка AI-агентов и шаблонов запросов",
-    href: "/settings/prompts",
-    phase: "MVP",
-    enabled: true,
-  },
   {
     id: "projects",
     title: "Все проекты",

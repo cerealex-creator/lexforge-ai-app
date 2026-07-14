@@ -39,6 +39,7 @@ class ComparisonTaskOut(BaseModel):
     created_at: datetime
     completed_at: Optional[datetime] = None
     result: Optional[ComparisonResultOut] = None
+    project_id: Optional[uuid.UUID] = None
 
     model_config = {"from_attributes": True}
 

@@ -5,7 +5,8 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { AuthGuard } from "@/components/auth-guard";
 import { AppShell } from "@/components/app-shell";
-import { ReviewResultPanel, type RefineRequest } from "@/components/review-result-panel";
+import { ReviewResultPanel, type RefineRequest, type AnnotatedExportOptions, type ProtocolExportOptions, type RevisedExportOptions } from "@/components/review-result-panel";
+import { CreateProjectFromResultButton } from "@/components/create-project-from-result";
 import { Button } from "@/components/ui/button";
 import { useAuthStore, useActiveCompany } from "@/lib/store";
 import { reviewApi, documentApi, ApiError, type ReviewTask } from "@/lib/api";
@@ -26,6 +27,10 @@ function ReviewTaskPageContent() {
   const [exportingAnnotated, setExportingAnnotated] = useState(false);
   const [commentAuthor, setCommentAuthor] = useState("");
   const [refining, setRefining] = useState(false);
+  const [approving, setApproving] = useState(false);
+  const [dismissing, setDismissing] = useState(false);
+  const [exportingProtocol, setExportingProtocol] = useState(false);
+  const [exportingRevised, setExportingRevised] = useState(false);
 
   useEffect(() => {
     if (!company) return;
@@ -66,12 +71,17 @@ function ReviewTaskPageContent() {
     }
   };
 
-  const handleExportAnnotated = async () => {
+  const handleExportAnnotated = async (opts: AnnotatedExportOptions) => {
     if (!company) return;
     setExportingAnnotated(true);
     setExportError(null);
     try {
-      const blob = await reviewApi.exportAnnotatedReview(token, taskId, company.id, commentAuthor);
+      const blob = await reviewApi.exportAnnotatedReview(token, taskId, company.id, {
+        commentAuthor: opts.commentAuthor,
+        includeMetadata: opts.includeMetadata,
+        includeAiDisclaimer: opts.includeAiDisclaimer,
+        onlyApproved: opts.onlyApproved,
+      });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -85,6 +95,56 @@ function ReviewTaskPageContent() {
       setExportError(e instanceof ApiError ? e.message : "Не удалось скачать договор с комментариями");
     } finally {
       setExportingAnnotated(false);
+    }
+  };
+
+  const handleExportProtocol = async (opts: ProtocolExportOptions) => {
+    if (!company) return;
+    setExportingProtocol(true);
+    setExportError(null);
+    try {
+      const blob = await reviewApi.exportDisagreementProtocol(token, taskId, company.id, {
+        onlyApproved: opts.onlyApproved,
+        includeOurComments: opts.includeOurComments,
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const base = (documentTitle ?? "договор").replace(/\.[^./]+$/, "");
+      a.download = `Протокол_разногласий_${base}.docx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setExportError(e instanceof ApiError ? e.message : "Не удалось скачать протокол разногласий");
+    } finally {
+      setExportingProtocol(false);
+    }
+  };
+
+  const handleExportRevised = async (opts: RevisedExportOptions) => {
+    if (!company) return;
+    setExportingRevised(true);
+    setExportError(null);
+    try {
+      const blob = await reviewApi.exportRevisedEdition(token, taskId, company.id, {
+        onlyApproved: opts.onlyApproved,
+        saveToArchive: opts.saveToArchive,
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const base = (documentTitle ?? "договор").replace(/\.[^./]+$/, "");
+      a.download = `Новая_редакция_${base}.docx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setExportError(e instanceof ApiError ? e.message : "Не удалось скачать новую редакцию");
+    } finally {
+      setExportingRevised(false);
     }
   };
 
@@ -106,11 +166,40 @@ function ReviewTaskPageContent() {
         accepted_findings: req.acceptedFindings,
         finding_feedback: req.findingFeedback,
         lawyer_notes: req.lawyerNotes,
+        dismissed_findings: task.result?.dismissed_findings ?? [],
       });
       router.push(`/contracts/review/${next.id}`);
     } catch (e) {
       setExportError(e instanceof ApiError ? e.message : "Не удалось запустить перепроверку");
       setRefining(false);
+    }
+  };
+
+  const handleApproveToVault = async (findings: import("@/lib/api").Finding[]) => {
+    if (!company || !task || !findings.length) return;
+    setApproving(true);
+    setExportError(null);
+    try {
+      const next = await reviewApi.approveFindings(token, taskId, company.id, findings);
+      setTask(next);
+    } catch (e) {
+      setExportError(e instanceof ApiError ? e.message : "Не удалось добавить в копилку");
+    } finally {
+      setApproving(false);
+    }
+  };
+
+  const handleDismissFindings = async (findings: import("@/lib/api").Finding[]) => {
+    if (!company || !task || !findings.length) return;
+    setDismissing(true);
+    setExportError(null);
+    try {
+      const next = await reviewApi.dismissFindings(token, taskId, company.id, findings);
+      setTask(next);
+    } catch (e) {
+      setExportError(e instanceof ApiError ? e.message : "Не удалось отменить замечание");
+    } finally {
+      setDismissing(false);
     }
   };
 
@@ -158,15 +247,33 @@ function ReviewTaskPageContent() {
           onCommentAuthorChange={setCommentAuthor}
           onExport={task.status === "completed" ? handleExport : undefined}
           onExportAnnotated={task.status === "completed" ? handleExportAnnotated : undefined}
+          onExportProtocol={task.status === "completed" ? handleExportProtocol : undefined}
+          onExportRevised={task.status === "completed" ? handleExportRevised : undefined}
           exporting={exporting}
           exportingAnnotated={exportingAnnotated}
+          exportingProtocol={exportingProtocol}
+          exportingRevised={exportingRevised}
           exportError={exportError}
           onRefine={task.status === "completed" ? handleRefine : undefined}
+          onApproveToVault={task.status === "completed" ? handleApproveToVault : undefined}
+          onDismissFindings={task.status === "completed" ? handleDismissFindings : undefined}
           refining={refining}
+          approving={approving}
+          dismissing={dismissing}
           actions={
-            <Link href="/contracts/review">
-              <Button variant="secondary">Новая проверка</Button>
-            </Link>
+            <>
+              {task.status === "completed" && (
+                <CreateProjectFromResultButton
+                  documentId={task.document_id}
+                  title={documentTitle ?? undefined}
+                  alreadyInProject={Boolean(task.project_id)}
+                  existingProjectId={task.project_id}
+                />
+              )}
+              <Link href="/contracts/review">
+                <Button variant="secondary">Новая проверка</Button>
+              </Link>
+            </>
           }
         />
       )}

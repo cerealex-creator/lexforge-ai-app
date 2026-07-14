@@ -45,6 +45,10 @@ def merge_review_results(agent_results: list[dict], agent_labels: list[str]) -> 
                 existing["severity"] = f.get("severity", existing.get("severity"))
             if f.get("suggested_revision") and not existing.get("suggested_revision"):
                 existing["suggested_revision"] = f["suggested_revision"]
+                if f.get("revision_action"):
+                    existing["revision_action"] = f["revision_action"]
+            elif f.get("revision_action") and not existing.get("revision_action"):
+                existing["revision_action"] = f["revision_action"]
             if f.get("rationale"):
                 existing["rationale"] = f"{existing.get('rationale', '')} · {f['rationale']}".strip(" ·")
             sources = existing.setdefault("sources", [])

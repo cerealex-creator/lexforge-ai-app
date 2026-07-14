@@ -6,6 +6,7 @@ import Link from "next/link";
 import { AuthGuard } from "@/components/auth-guard";
 import { AppShell } from "@/components/app-shell";
 import { ComparisonResultPanel } from "@/components/comparison-result-panel";
+import { CreateProjectFromResultButton } from "@/components/create-project-from-result";
 import { Button } from "@/components/ui/button";
 import { useAuthStore, useActiveCompany } from "@/lib/store";
 import { comparisonApi, documentApi, ApiError, type ComparisonTask } from "@/lib/api";
@@ -106,9 +107,19 @@ function CompareTaskPageContent() {
           exporting={exporting}
           exportError={exportError}
           actions={
-            <Link href="/contracts/compare">
-              <Button variant="secondary">Новое сравнение</Button>
-            </Link>
+            <>
+              {task.status === "completed" && (
+                <CreateProjectFromResultButton
+                  documentId={task.base_document_id}
+                  title={baseTitle ?? undefined}
+                  alreadyInProject={Boolean(task.project_id)}
+                  existingProjectId={task.project_id}
+                />
+              )}
+              <Link href="/contracts/compare">
+                <Button variant="secondary">Новое сравнение</Button>
+              </Link>
+            </>
           }
         />
       )}

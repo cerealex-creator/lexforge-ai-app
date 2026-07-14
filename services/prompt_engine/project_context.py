@@ -61,7 +61,8 @@ def format_project_context(project: Project, *, for_redline: bool = False) -> st
         if jp.get("last_checked_at"):
             lines.append(f"- Проверено: {jp['last_checked_at']}")
         lines.append(
-            "(Автозагрузка дел из КАД/интернета пока не подключена — опирайся на профиль и чеклист due diligence.)"
+            "(Автозагрузка дел из КАД/интернета не подключена — опирайся на профиль и чеклист "
+            "самостоятельного due diligence: ЕГРЮЛ, КАД, ФССП, Федресурс, СМИ.)"
         )
 
     mem_block = format_memory_block(project.memory_json)

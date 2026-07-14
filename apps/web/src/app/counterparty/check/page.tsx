@@ -7,6 +7,7 @@ import { AppShell } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { useActiveCompany, useAuthStore } from "@/lib/store";
+import { DueDiligenceGuide } from "@/components/due-diligence-guide";
 import { ApiError, counterpartyApi, type CounterpartyCheck } from "@/lib/api";
 import { Loader2, Search, ShieldAlert } from "lucide-react";
 
@@ -104,11 +105,12 @@ function CounterpartyCheckContent() {
         <CardHeader>
           <h2 className="font-semibold text-slate-900">Запуск проверки</h2>
           <p className="text-xs text-slate-500">
-            Сейчас модуль не ходит во внешние реестры автоматически — он даёт структурированный due diligence и список
-            источников, которые нужно проверить вручную.
+            Модуль не ходит во внешние реестры сам — формирует due diligence и подробный чеклист с URL и техниками
+            поиска. Ниже — справочник ресурсов для самостоятельной проверки.
           </p>
         </CardHeader>
         <CardContent className="space-y-4">
+          <DueDiligenceGuide compact />
           <div>
             <p className="text-sm font-medium text-slate-700">ИНН</p>
             <input
@@ -165,15 +167,40 @@ function CounterpartyCheckContent() {
             {result?.manual_checks?.length ? (
               <div>
                 <p className="text-sm font-semibold text-slate-900">Что проверить вручную</p>
-                <ul className="mt-1 list-disc pl-5 text-sm text-slate-700">
+                <ul className="mt-2 space-y-2">
                   {result.manual_checks.map((c: any, idx: number) => (
-                    <li key={idx}>
-                      <span className="font-medium">{c.source}</span>: {c.what_to_check}
+                    <li key={idx} className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-sm">
+                      <div className="font-medium text-slate-900">
+                        {c.url ? (
+                          <a href={c.url} target="_blank" rel="noreferrer" className="text-brand-600 hover:underline">
+                            {c.source}
+                          </a>
+                        ) : (
+                          c.source
+                        )}
+                      </div>
+                      {c.what_to_check && (
+                        <p className="mt-0.5 text-slate-700">
+                          <span className="text-slate-500">Что:</span> {c.what_to_check}
+                        </p>
+                      )}
+                      {c.how_to_check && (
+                        <p className="mt-0.5 text-xs text-slate-500">
+                          <span className="font-medium">Как:</span> {c.how_to_check}
+                        </p>
+                      )}
                     </li>
                   ))}
                 </ul>
               </div>
             ) : null}
+
+            {result?.search_technique && (
+              <div className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                <span className="font-medium">Порядок проверки: </span>
+                {String(result.search_technique)}
+              </div>
+            )}
 
             {links.length ? (
               <div>
