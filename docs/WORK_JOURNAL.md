@@ -1117,3 +1117,13 @@
 **Сделано:** Обёрнуты в `Suspense` страницы с `useSearchParams` (login, review, compare, projects/new).
 **Файлы:** `apps/web/src/app/login/page.tsx`, `contracts/review`, `contracts/compare`, `projects/new`.
 **Статус:** Завершено.
+
+## 2026-07-18 — LexForge развёрнут на VPS
+**Запрос:** Закоммитить и запушить рабочую версию после успешного деплоя.
+**Сделано:**
+- Приложение доступно на http://85.239.40.180 (после включения nginx-конфига LexForge вместо default).
+- Регистрация: `/register`; seed-admin: `admin@lexforge.ru`.
+- Код рабочей версии уже в `origin/main` (последний коммит `bc8db28` + предыдущие фиксы деплоя).
+**Файлы/артефакты:** `deploy/`, `docs/DEPLOY.md`, ветка `main`.
+**Статус:** Завершено.
+**Следующий шаг:** Обновления через `git pull` + `bash deploy/scripts/update.sh`; HTTPS при появлении домена.
