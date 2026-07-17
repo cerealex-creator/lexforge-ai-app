@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { AuthGuard } from "@/components/auth-guard";
 import { AppShell } from "@/components/app-shell";
@@ -835,7 +835,16 @@ function ReviewPageContent() {
 export default function ContractReviewPage() {
   return (
     <AuthGuard>
-      <ReviewPageContent />
+      <Suspense
+        fallback={
+          <div className="flex min-h-[40vh] flex-col items-center justify-center gap-2">
+            <Loader2 className="h-6 w-6 animate-spin text-brand-600" />
+            <p className="text-sm text-slate-500">Загрузка…</p>
+          </div>
+        }
+      >
+        <ReviewPageContent />
+      </Suspense>
     </AuthGuard>
   );
 }

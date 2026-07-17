@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { AuthGuard } from "@/components/auth-guard";
@@ -17,7 +17,16 @@ const VALID_KINDS: ProjectKind[] = ["contract", "litigation", "consulting"];
 export default function NewProjectPage() {
   return (
     <AuthGuard>
-      <NewProjectContent />
+      <Suspense
+        fallback={
+          <div className="flex min-h-[40vh] flex-col items-center justify-center gap-2">
+            <Loader2 className="h-6 w-6 animate-spin text-brand-600" />
+            <p className="text-sm text-slate-500">Загрузка…</p>
+          </div>
+        }
+      >
+        <NewProjectContent />
+      </Suspense>
     </AuthGuard>
   );
 }

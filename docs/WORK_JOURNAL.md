@@ -1111,3 +1111,9 @@
 **Файлы:** `apps/web/src/lib/store.ts`.
 **Статус:** Завершено.
 **Следующий шаг:** `git pull` + `first-deploy.sh` на сервере.
+
+## 2026-07-18 — Фикс next build: Suspense для useSearchParams
+**Запрос:** Критична ли ошибка Export на `/login`.
+**Сделано:** Обёрнуты в `Suspense` страницы с `useSearchParams` (login, review, compare, projects/new).
+**Файлы:** `apps/web/src/app/login/page.tsx`, `contracts/review`, `contracts/compare`, `projects/new`.
+**Статус:** Завершено.
