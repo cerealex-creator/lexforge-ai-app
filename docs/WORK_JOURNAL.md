@@ -1095,3 +1095,12 @@
 **Файлы/артефакты:** `deploy/`, `docs/DEPLOY.md`, `apps/web/src/app/register/`, `apps/api/routers/auth.py`, `apps/api/config.py`.
 **Статус:** Завершено (локально; на VPS ещё не развёрнуто).
 **Следующий шаг:** Закоммитить и запушить, затем на `85.239.40.180` пройти шаги из `docs/DEPLOY.md`.
+
+## 2026-07-18 — Фикс деплоя: Python 3.12 и TypeScript FormField
+**Запрос:** Ошибки first-deploy на VPS (pydantic-core / Python 3.14; next build FormField.multiline).
+**Сделано:**
+- Скрипты деплоя требуют Python 3.12 (deadsnakes), пересоздают неверный `.venv`.
+- В `contracts/create` поле формы проверяет `kind === \"textarea\"` вместо несуществующего `multiline`.
+**Файлы:** `deploy/scripts/*`, `apps/web/src/app/contracts/create/page.tsx`, `docs/DEPLOY.md`.
+**Статус:** Завершено (нужен pull + повтор first-deploy на сервере).
+**Следующий шаг:** На сервере `git pull` и `bash deploy/scripts/first-deploy.sh`.

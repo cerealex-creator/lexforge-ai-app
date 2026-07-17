@@ -202,6 +202,7 @@ sudo certbot --nginx -d ваш.домен
 | Frontend ходит на localhost | Пересобрать web после смены `NEXT_PUBLIC_API_URL` (`update.sh`) |
 | `next build` падает по памяти | Убедиться, что swap включён: `swapon --show` |
 | Нет компании у нового пользователя | Используйте `/register` (создаёт компанию автоматически) |
+| Ошибка сборки `pydantic-core` / Python 3.14 | Нужен Python 3.12: `add-apt-repository ppa:deadsnakes/ppa`, затем `apt install python3.12 python3.12-venv`, удалить `.venv` и снова `first-deploy.sh` |
 
 ## 10. Безопасность (минимум)
 

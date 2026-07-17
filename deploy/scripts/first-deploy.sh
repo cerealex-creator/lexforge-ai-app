@@ -37,8 +37,22 @@ docker compose -f deploy/docker-compose.prod.yml --env-file .env up -d
 sleep 5
 
 echo "==> Python venv + зависимости API"
+if ! command -v python3.12 >/dev/null 2>&1; then
+  echo "Нужен Python 3.12. Установите:"
+  echo "  sudo add-apt-repository -y ppa:deadsnakes/ppa"
+  echo "  sudo apt-get update && sudo apt-get install -y python3.12 python3.12-venv python3.12-dev"
+  exit 1
+fi
+# Recreate venv if missing or built with wrong Python (e.g. 3.14)
+if [[ -d .venv ]]; then
+  VENV_PY="$(".venv/bin/python" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || echo "?")"
+  if [[ "$VENV_PY" != "3.12" ]]; then
+    echo "Пересоздаю .venv (было Python $VENV_PY, нужно 3.12)"
+    rm -rf .venv
+  fi
+fi
 if [[ ! -d .venv ]]; then
-  python3.12 -m venv .venv || python3 -m venv .venv
+  python3.12 -m venv .venv
 fi
 .venv/bin/pip install --upgrade pip
 .venv/bin/pip install -r apps/api/requirements.txt

@@ -400,14 +400,13 @@ function DynamicField({
   value: string;
   onChange: (v: string) => void;
 }) {
-  if (field.multiline) {
+  if (field.kind === "textarea") {
     return (
       <div>
         <p className="mb-1 text-sm font-medium text-slate-700">
           {field.label}
           {field.required ? "" : " (опц.)"}
         </p>
-        {field.hint && <p className="mb-1 text-xs text-slate-500">{field.hint}</p>}
         <textarea
           value={value}
           onChange={(e) => onChange(e.target.value)}
@@ -424,7 +423,6 @@ function DynamicField({
         {field.label}
         {field.required ? "" : " (опц.)"}
       </p>
-      {field.hint && <p className="mb-1 text-xs text-slate-500">{field.hint}</p>}
       <input
         type="text"
         value={value}

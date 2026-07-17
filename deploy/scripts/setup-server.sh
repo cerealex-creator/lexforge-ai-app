@@ -16,9 +16,16 @@ apt-get update -y
 apt-get install -y \
   ca-certificates curl gnupg git nginx ufw \
   python3 python3-venv python3-pip \
-  build-essential libpq-dev
-# Prefer 3.12 if the distro ships it (Ubuntu 24.04+)
-apt-get install -y python3.12 python3.12-venv 2>/dev/null || true
+  build-essential libpq-dev software-properties-common
+
+# LexForge needs Python 3.12 (not 3.14 from Ubuntu 26.04 — pydantic/pyo3 unsupported yet)
+if ! command -v python3.12 >/dev/null 2>&1; then
+  echo "==> Установка Python 3.12 (deadsnakes)"
+  add-apt-repository -y ppa:deadsnakes/ppa
+  apt-get update -y
+  apt-get install -y python3.12 python3.12-venv python3.12-dev
+fi
+python3.12 --version
 
 # Node.js 20 LTS
 if ! command -v node >/dev/null 2>&1; then

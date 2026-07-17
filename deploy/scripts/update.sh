@@ -39,6 +39,21 @@ echo "==> Postgres/Redis"
 docker compose -f deploy/docker-compose.prod.yml --env-file .env up -d
 
 echo "==> Python dependencies + migrations"
+if ! command -v python3.12 >/dev/null 2>&1; then
+  echo "Нужен Python 3.12 (см. docs/DEPLOY.md)"
+  exit 1
+fi
+if [[ -d .venv ]]; then
+  VENV_PY="$(".venv/bin/python" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || echo "?")"
+  if [[ "$VENV_PY" != "3.12" ]]; then
+    echo "Пересоздаю .venv (было Python $VENV_PY, нужно 3.12)"
+    rm -rf .venv
+  fi
+fi
+if [[ ! -d .venv ]]; then
+  python3.12 -m venv .venv
+fi
+.venv/bin/pip install --upgrade pip
 .venv/bin/pip install -r apps/api/requirements.txt
 cd packages/db
 PYTHONPATH="$ROOT" "$ROOT/.venv/bin/alembic" -c alembic.ini upgrade head
