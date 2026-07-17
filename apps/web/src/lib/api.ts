@@ -168,6 +168,61 @@ export interface Finding {
   previous_rationale?: string | null;
 }
 
+export type CoverageStatus =
+  | "implemented"
+  | "partial"
+  | "missing"
+  | "not_applicable"
+  | "uncertain";
+
+export interface CoverageSection {
+  id: string;
+  title: string;
+  clause_refs: string[];
+  summary: string;
+  status: CoverageStatus | string;
+  safety_assessment: string;
+}
+
+export interface CoverageRequirement {
+  name: string;
+  status: CoverageStatus | string;
+  clause_refs: string[];
+  assessment: string;
+  safety_reason: string;
+}
+
+export interface MissingProvision {
+  name: string;
+  relevance: string;
+  impact: string;
+  recommendation: string;
+}
+
+export interface CoverageMap {
+  overview: string;
+  structure_summary: string;
+  sections: CoverageSection[];
+  requirements: CoverageRequirement[];
+  missing_provisions: MissingProvision[];
+  uncertainties: string[];
+  coverage_stats: Record<string, number>;
+  conclusion: string;
+}
+
+export interface SectionReview {
+  section_id: string;
+  section_title: string;
+  clause_refs: string[];
+  lawyer_comment: string;
+  summary: string;
+  conclusion: string;
+  safety_assessment: string;
+  status: CoverageStatus | string;
+  checked_aspects: string[];
+  uncertainties: string[];
+}
+
 export interface ReviewResult {
   risk_score?: number | null;
   risk_rationale?: string | null;
@@ -184,6 +239,9 @@ export interface ReviewResult {
   deferred_count?: number | null;
   dismissed_count?: number | null;
   cascade_analysis?: boolean | null;
+  coverage_map?: CoverageMap | null;
+  coverage_map_error?: string | null;
+  section_rechecks?: SectionReview[];
 }
 
 export interface ReviewListItem {
@@ -708,11 +766,12 @@ export const reviewApi = {
       user_comment?: string;
       reference_document_id?: string;
       parent_task_id?: string;
-      refine_scope?: "focus_only" | "supplement";
+      refine_scope?: "focus_only" | "supplement" | "section_recheck";
       accepted_findings?: Finding[];
       finding_feedback?: { finding: Finding; note: string }[];
       lawyer_notes?: string;
       dismissed_findings?: Finding[];
+      section_recheck?: { id: string };
       project_id?: string;
       cascade_analysis?: boolean;
       upstream_document_id?: string;

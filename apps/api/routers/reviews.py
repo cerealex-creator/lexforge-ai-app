@@ -97,6 +97,9 @@ def _task_to_out(task: DocumentTask) -> ReviewTaskOut:
             deferred_count=data.get("deferred_count"),
             dismissed_count=data.get("dismissed_count", len(dismissed)),
             cascade_analysis=data.get("cascade_analysis"),
+            coverage_map=data.get("coverage_map"),
+            coverage_map_error=data.get("coverage_map_error"),
+            section_rechecks=data.get("section_rechecks") or [],
         )
     ctx = task.review_context or {}
     parent_raw = ctx.get("parent_task_id")
@@ -201,6 +204,11 @@ async def create_review(
             for fb in body.finding_feedback
             if fb.note.strip()
         ]
+        if refine_scope == "section_recheck" and not body.section_recheck:
+            raise HTTPException(
+                status_code=422,
+                detail="Для углублённой проверки выберите раздел договора",
+            )
         if refine_scope == "focus_only" and not lawyer_notes and not finding_feedback and not body.accepted_findings:
             raise HTTPException(
                 status_code=422,
@@ -224,6 +232,23 @@ async def create_review(
 
         parent_risk = parent.result.risk_score if parent.result else None
         parent_result_json = (parent.result.result_json or {}) if parent.result else {}
+        canonical_section = None
+        if refine_scope == "section_recheck" and body.section_recheck:
+            requested_id = body.section_recheck.id.strip()
+            parent_sections = ((parent_result_json.get("coverage_map") or {}).get("sections") or [])
+            canonical_section = next(
+                (
+                    section
+                    for section in parent_sections
+                    if isinstance(section, dict) and str(section.get("id") or "") == requested_id
+                ),
+                None,
+            )
+            if not canonical_section:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Выбранный раздел отсутствует в карте исходной проверки",
+                )
         parent_vault = extract_parent_vault(parent_result_json, parent_ctx)
         accepted = [f.model_dump() for f in body.accepted_findings]
         approved_vault = merge_vault(parent_vault, accepted)
@@ -242,6 +267,10 @@ async def create_review(
             "lawyer_notes": lawyer_notes,
             "parent_risk_score": parent_risk,
             "parent_risk_rationale": parent_result_json.get("risk_rationale"),
+            "coverage_map": parent_result_json.get("coverage_map"),
+            "section_rechecks": parent_result_json.get("section_rechecks") or [],
+            # Only the section ID is trusted from the client; all descriptive data comes from the parent map.
+            "section_recheck": canonical_section,
             "cascade_analysis": cascade_analysis,
             "upstream_document_id": str(upstream_document_id) if upstream_document_id else None,
         }

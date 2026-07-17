@@ -28,7 +28,13 @@ from services.ai_orchestrator.review_findings import (
 from services.prompt_engine.project_context import format_project_context
 from services.prompt_engine.project_memory import update_memory_from_review
 from services.prompt_engine.prompt_service import get_prompt_map
-from services.prompt_engine.review_prompts import build_focused_refine_prompt, build_review_prompt
+from services.prompt_engine.review_prompts import (
+    build_coverage_map_prompt,
+    build_focused_refine_prompt,
+    build_review_prompt,
+    build_section_recheck_prompt,
+    build_technical_errors_prompt,
+)
 
 AGENT_SPECS: list[tuple[str, str]] = [
     ("Коммерческий", "contract_review.agent.commercial"),
@@ -66,6 +72,7 @@ def _refine_kwargs(task: DocumentTask) -> dict:
         and not ctx.get("finding_feedback")
         and not ctx.get("lawyer_notes")
         and not ctx.get("approved_vault")
+        and not ctx.get("section_recheck")
     ):
         return {}
     return {
@@ -154,10 +161,145 @@ def merge_refine_result(task: DocumentTask, llm_result: dict) -> dict:
     if llm_result.get("multi_agent"):
         out["multi_agent"] = llm_result.get("multi_agent")
         out["agents"] = llm_result.get("agents")
+    if ctx.get("coverage_map"):
+        out["coverage_map"] = ctx.get("coverage_map")
+    out["section_rechecks"] = ctx.get("section_rechecks") or []
     llm_r = (llm_result.get("risk_rationale") or "").strip()
     if llm_r and feedback:
         out["risk_rationale"] = f"{out['risk_rationale']} {llm_r}"
     return out
+
+
+def _normalize_coverage_map(raw: dict | None) -> dict:
+    raw = raw if isinstance(raw, dict) else {}
+    sections = [s for s in (raw.get("sections") or []) if isinstance(s, dict)]
+    requirements = [r for r in (raw.get("requirements") or []) if isinstance(r, dict)]
+    missing = [m for m in (raw.get("missing_provisions") or []) if isinstance(m, dict)]
+    allowed = {"implemented", "partial", "missing", "not_applicable", "uncertain"}
+
+    seen_section_ids: set[str] = set()
+    for i, section in enumerate(sections, start=1):
+        section_id = str(section.get("id") or "").strip()
+        if not section_id or section_id in seen_section_ids:
+            section_id = f"section-{i}"
+        seen_section_ids.add(section_id)
+        section["id"] = section_id
+        section.setdefault("title", f"Раздел {i}")
+        section["clause_refs"] = [str(x) for x in (section.get("clause_refs") or [])]
+        if section.get("status") not in allowed:
+            section["status"] = "uncertain"
+    for requirement in requirements:
+        requirement["clause_refs"] = [str(x) for x in (requirement.get("clause_refs") or [])]
+        if requirement.get("status") not in allowed:
+            requirement["status"] = "uncertain"
+
+    counts = {status: 0 for status in allowed}
+    for requirement in requirements:
+        counts[requirement["status"]] += 1
+    stats = {
+        "total": len(requirements),
+        "implemented": counts["implemented"],
+        "partial": counts["partial"],
+        "missing": counts["missing"],
+        "uncertain": counts["uncertain"],
+        "not_applicable": counts["not_applicable"],
+    }
+    return {
+        "overview": str(raw.get("overview") or ""),
+        "structure_summary": str(raw.get("structure_summary") or ""),
+        "sections": sections,
+        "requirements": requirements,
+        "missing_provisions": missing,
+        "uncertainties": [str(x) for x in (raw.get("uncertainties") or [])],
+        "coverage_stats": stats,
+        "conclusion": str(raw.get("conclusion") or ""),
+    }
+
+
+def _merge_section_recheck_result(task: DocumentTask, llm_result: dict) -> dict:
+    ctx = task.review_context or {}
+    parent_findings = ensure_finding_ids(ctx.get("parent_findings") or [])
+    new_findings = ensure_finding_ids(
+        [f for f in (llm_result.get("findings") or []) if isinstance(f, dict)],
+        default_status="new",
+    )
+    dismissed_keys = {
+        finding_content_key(f) for f in (ctx.get("dismissed_findings") or []) if isinstance(f, dict)
+    }
+    vault = ensure_finding_ids(ctx.get("approved_vault") or [], default_status="from_vault")
+    vault_keys = {finding_content_key(f) for f in vault}
+    by_key = {
+        finding_content_key(f): f
+        for f in parent_findings
+        if finding_content_key(f) not in dismissed_keys and finding_content_key(f) not in vault_keys
+    }
+    revised_count = 0
+    added_count = 0
+    for finding in new_findings:
+        key = finding_content_key(finding)
+        if key and key not in dismissed_keys and key not in vault_keys:
+            previous = by_key.get(key)
+            if previous:
+                finding["id"] = previous.get("id") or finding.get("id")
+                finding["status"] = "revised"
+                revised_count += 1
+            else:
+                finding["status"] = "new"
+                added_count += 1
+            by_key[key] = finding
+
+    section_review = llm_result.get("section_review")
+    if not isinstance(section_review, dict):
+        section_review = {}
+    requested = ctx.get("section_recheck") or {}
+    section_review.setdefault("section_id", requested.get("id") or "")
+    section_review.setdefault("section_title", requested.get("title") or "")
+    section_review.setdefault("clause_refs", requested.get("clause_refs") or [])
+    section_review["lawyer_comment"] = ctx.get("lawyer_notes") or ""
+    allowed_statuses = {"implemented", "partial", "missing", "uncertain"}
+    if section_review.get("status") not in allowed_statuses:
+        section_review["status"] = "uncertain"
+
+    rechecks = list(ctx.get("section_rechecks") or [])
+    rechecks.append(section_review)
+    dismissed = ctx.get("dismissed_findings") or []
+    findings = list(by_key.values())
+    coverage_map = dict(ctx.get("coverage_map") or {})
+    sections = [dict(item) for item in (coverage_map.get("sections") or []) if isinstance(item, dict)]
+    for section in sections:
+        if str(section.get("id") or "") == str(section_review.get("section_id") or ""):
+            section["status"] = section_review["status"]
+            section["summary"] = section_review.get("summary") or section.get("summary") or ""
+            section["safety_assessment"] = (
+                section_review.get("safety_assessment") or section.get("safety_assessment") or ""
+            )
+            break
+    coverage_map["sections"] = sections
+    active_score = _score_from_findings(findings)
+    parent_score = int(ctx.get("parent_risk_score") or 0)
+    return {
+        "risk_score": max(parent_score, active_score),
+        "risk_rationale": " ".join(
+            part
+            for part in [
+                str(ctx.get("parent_risk_rationale") or "").strip(),
+                str(llm_result.get("risk_rationale") or "").strip(),
+            ]
+            if part
+        ),
+        "findings": findings,
+        "approved_vault": vault,
+        "dismissed_findings": dismissed,
+        "accepted_count": len(vault),
+        "new_count": added_count,
+        "revised_count": revised_count,
+        "deferred_count": max(0, len(findings) - added_count - revised_count),
+        "dismissed_count": len(dismissed),
+        "refined_from": ctx.get("parent_task_id"),
+        "refine_scope": "section_recheck",
+        "coverage_map": coverage_map,
+        "section_rechecks": rechecks,
+    }
 
 
 async def run_contract_review(task_id: uuid.UUID) -> None:
@@ -189,7 +331,14 @@ async def run_contract_review(task_id: uuid.UUID) -> None:
             refine_scope = ctx.get("refine_scope")
             feedback = ctx.get("finding_feedback") or []
 
-            if refine_scope == "focus_only" and feedback:
+            if refine_scope == "section_recheck":
+                result_data = await _run_section_recheck(
+                    db,
+                    task=task,
+                    company=company,
+                    contract_text=version.parsed_text,
+                )
+            elif refine_scope == "focus_only" and feedback:
                 result_data = await _run_focused_refine(
                     db,
                     task=task,
@@ -209,6 +358,16 @@ async def run_contract_review(task_id: uuid.UUID) -> None:
                     dismissed=ctx.get("dismissed_findings") or [],
                 )
                 result_data["refined_from"] = ctx.get("parent_task_id")
+                result_data["coverage_map"] = ctx.get("coverage_map")
+                result_data["section_rechecks"] = ctx.get("section_rechecks") or []
+            elif task.review_mode.value == "errors":
+                # Technical proofreading only — never multi-agent / position / coverage map.
+                result_data = await _run_technical_errors_review(
+                    task=task,
+                    company=company,
+                    contract_text=version.parsed_text,
+                )
+                result_data = merge_refine_result(task, result_data)
             elif task.multi_agent and refine_scope != "focus_only":
                 result_data = await _run_multi_agent_review(
                     db,
@@ -230,6 +389,22 @@ async def run_contract_review(task_id: uuid.UUID) -> None:
 
             if not refine_scope:
                 result_data = normalize_initial_result(result_data)
+                if task.review_mode.value == "errors":
+                    result_data = _filter_technical_errors_result(result_data)
+                    result_data["section_rechecks"] = []
+                else:
+                    try:
+                        result_data["coverage_map"] = await _run_coverage_map(
+                            db,
+                            task=task,
+                            company=company,
+                            contract_text=version.parsed_text,
+                            findings=result_data.get("findings") or [],
+                        )
+                        result_data["section_rechecks"] = []
+                    except Exception as coverage_error:
+                        # A coverage-map failure must not discard an otherwise valid review.
+                        result_data["coverage_map_error"] = str(coverage_error)[:500]
 
             risk_score = int(result_data.get("risk_score", 5))
             risk_score = max(1, min(10, risk_score))
@@ -266,6 +441,48 @@ async def run_contract_review(task_id: uuid.UUID) -> None:
             await db.commit()
 
 
+async def _run_technical_errors_review(
+    *,
+    task: DocumentTask,
+    company: Company | None,
+    contract_text: str,
+) -> dict:
+    system, user = build_technical_errors_prompt(
+        company_name=company.name if company else "Компания",
+        contract_text=contract_text,
+        user_comment=task.user_comment,
+    )
+    return await chat_json(system, user)
+
+
+def _filter_technical_errors_result(result: dict) -> dict:
+    """Keep only technical findings; drop legal/risk/financial leftovers from the model."""
+    allowed = {"errors", "spelling", "syntax", "template", "typo", "editorial"}
+    findings = []
+    for f in result.get("findings") or []:
+        if not isinstance(f, dict):
+            continue
+        issue = str(f.get("issue_type") or "errors").strip().lower()
+        if issue in allowed or issue.startswith("error"):
+            cleaned = dict(f)
+            cleaned["issue_type"] = "errors"
+            findings.append(cleaned)
+    out = dict(result)
+    out["findings"] = findings
+    out["new_count"] = len(findings)
+    out.pop("coverage_map", None)
+    out.pop("coverage_map_error", None)
+    if findings:
+        out["risk_score"] = _score_from_findings(findings)
+    else:
+        out["risk_score"] = 1
+        out["risk_rationale"] = (
+            out.get("risk_rationale")
+            or "Технических дефектов текста (орфография, синтаксис, хвосты шаблона) не выявлено."
+        )
+    return out
+
+
 async def _run_focused_refine(
     db: AsyncSession,
     *,
@@ -289,6 +506,53 @@ async def _run_focused_refine(
     )
     llm_result = await chat_json(system, user)
     return merge_refine_result(task, llm_result)
+
+
+async def _position_instruction_for_task(db: AsyncSession, task: DocumentTask) -> str:
+    position_key = _resolve_position_key(task.industry, task.review_position)
+    if not position_key:
+        return ""
+    prompts = await get_prompt_map(db, [position_key])
+    return prompts.get(position_key, "")
+
+
+async def _run_coverage_map(
+    db: AsyncSession,
+    *,
+    task: DocumentTask,
+    company: Company | None,
+    contract_text: str,
+    findings: list[dict],
+) -> dict:
+    system, user = build_coverage_map_prompt(
+        company_name=company.name if company else "Компания",
+        contract_text=contract_text,
+        position_instruction=await _position_instruction_for_task(db, task),
+        findings=findings,
+    )
+    return _normalize_coverage_map(await chat_json(system, user))
+
+
+async def _run_section_recheck(
+    db: AsyncSession,
+    *,
+    task: DocumentTask,
+    company: Company | None,
+    contract_text: str,
+) -> dict:
+    ctx = task.review_context or {}
+    section = ctx.get("section_recheck")
+    if not isinstance(section, dict):
+        raise ValueError("Не выбран раздел для углублённой проверки")
+    system, user = build_section_recheck_prompt(
+        company_name=company.name if company else "Компания",
+        contract_text=contract_text,
+        section=section,
+        lawyer_comment=ctx.get("lawyer_notes") or task.user_comment,
+        position_instruction=await _position_instruction_for_task(db, task),
+        dismissed_findings=ctx.get("dismissed_findings") or [],
+    )
+    return _merge_section_recheck_result(task, await chat_json(system, user))
 
 
 async def _cascade_kwargs(db: AsyncSession, task: DocumentTask) -> dict:

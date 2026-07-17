@@ -6,7 +6,14 @@ import { AuthGuard } from "@/components/auth-guard";
 import { AppShell } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { ReviewResultPanel, type RefineRequest, type AnnotatedExportOptions, type ProtocolExportOptions, type RevisedExportOptions } from "@/components/review-result-panel";
+import {
+  ReviewResultPanel,
+  type RefineRequest,
+  type AnnotatedExportOptions,
+  type ProtocolExportOptions,
+  type RevisedExportOptions,
+  type SectionRecheckRequest,
+} from "@/components/review-result-panel";
 import { CreateProjectFromResultButton } from "@/components/create-project-from-result";
 import { useAuthStore, useActiveCompany } from "@/lib/store";
 import { useAppContext } from "@/lib/app-context";
@@ -17,9 +24,12 @@ import { Loader2 } from "lucide-react";
 import Link from "next/link";
 
 const MODES = [
-  { id: "full", label: "Полная проверка", desc: "Ошибки, риски, финансы, compliance" },
-  { id: "errors", label: "Ошибки", desc: "Орфография, логика, противоречия" },
-  { id: "risks", label: "Угрозы и риски", desc: "Юридические риски и невыгодные условия" },
+  { id: "full", label: "Полная проверка", desc: "Риски, финансы, compliance и правовая позиция" },
+  {
+    id: "errors",
+    label: "Проверка на ошибки",
+    desc: "Орфография, синтаксис, хвосты шаблона и чужие данные",
+  },
 ] as const;
 
 type ReviewIndustry = "construction" | "production" | "supply" | "general";
@@ -135,6 +145,7 @@ function ReviewPageContent() {
   const [dismissing, setDismissing] = useState(false);
   const [exportingProtocol, setExportingProtocol] = useState(false);
   const [exportingRevised, setExportingRevised] = useState(false);
+  const [sectionRechecking, setSectionRechecking] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const reviewPosition = selectedPosition.id;
@@ -158,6 +169,7 @@ function ReviewPageContent() {
             stopPoll();
             setStep("done");
             setRefining(false);
+            setSectionRechecking(false);
           }
         } catch {
           stopPoll();
@@ -227,7 +239,7 @@ function ReviewPageContent() {
 
   const handleSubmit = async () => {
     if (!documentPick || !company) return;
-    if (cascadeAnalysis && !upstreamDocId) {
+    if (mode !== "errors" && cascadeAnalysis && !upstreamDocId) {
       setError("Для каскадного анализа выберите договор с Заказчиком из картотеки");
       return;
     }
@@ -246,7 +258,7 @@ function ReviewPageContent() {
         documentId = uploaded.id;
       }
 
-      if (cascadeAnalysis && upstreamDocId === documentId) {
+      if (mode !== "errors" && cascadeAnalysis && upstreamDocId === documentId) {
         setStep("form");
         setError("Договор с Заказчиком должен отличаться от проверяемого договора с Подрядчиком");
         return;
@@ -256,14 +268,15 @@ function ReviewPageContent() {
         document_id: documentId,
         company_id: company.id,
         review_mode: mode,
-        industry: reviewIndustry,
-        review_position: reviewPosition,
-        multi_agent: multiAgent,
+        industry: mode === "errors" ? "general" : reviewIndustry,
+        review_position: mode === "errors" ? undefined : reviewPosition,
+        multi_agent: mode === "errors" ? false : multiAgent,
         user_comment: comment || undefined,
-        reference_document_id: referenceDocId || undefined,
+        reference_document_id: mode === "errors" ? undefined : referenceDocId || undefined,
         project_id: projectIdFromUrl || undefined,
-        cascade_analysis: cascadeAnalysis || undefined,
-        upstream_document_id: cascadeAnalysis ? upstreamDocId : undefined,
+        cascade_analysis: mode === "errors" ? undefined : cascadeAnalysis || undefined,
+        upstream_document_id:
+          mode !== "errors" && cascadeAnalysis ? upstreamDocId : undefined,
       });
       setTask(reviewTask);
       pollTask(reviewTask.id);
@@ -423,6 +436,36 @@ function ReviewPageContent() {
     }
   };
 
+  const handleSectionRecheck = async (req: SectionRecheckRequest) => {
+    if (!task || !company) return;
+    setSectionRechecking(true);
+    setError(null);
+    setStep("processing");
+    try {
+      const next = await reviewApi.startReview(token, {
+        document_id: task.document_id,
+        company_id: company.id,
+        review_mode: task.review_mode,
+        industry: task.industry,
+        multi_agent: false,
+        review_position: task.review_position ?? undefined,
+        reference_document_id: task.reference_document_id ?? undefined,
+        parent_task_id: task.id,
+        refine_scope: "section_recheck",
+        section_recheck: { id: req.section.id },
+        lawyer_notes: req.lawyerComment,
+        dismissed_findings: task.result?.dismissed_findings ?? [],
+        project_id: projectIdFromUrl || undefined,
+      });
+      setTask(next);
+      pollTask(next.id);
+    } catch (e) {
+      setStep("done");
+      setError(e instanceof ApiError ? e.message : "Не удалось запустить углублённую проверку");
+      setSectionRechecking(false);
+    }
+  };
+
   const handleApproveToVault = async (findings: import("@/lib/api").Finding[]) => {
     if (!task || !company || !findings.length) return;
     setApproving(true);
@@ -499,12 +542,19 @@ function ReviewPageContent() {
             <CardHeader>
               <h2 className="font-semibold">2. Режим проверки</h2>
             </CardHeader>
-            <CardContent className="grid gap-2 sm:grid-cols-3">
+            <CardContent className="grid gap-2 sm:grid-cols-2">
               {MODES.map((m) => (
                 <button
                   key={m.id}
                   type="button"
-                  onClick={() => setMode(m.id)}
+                  onClick={() => {
+                    setMode(m.id);
+                    if (m.id === "errors") {
+                      setMultiAgent(false);
+                      setCascadeAnalysis(false);
+                      setUpstreamDocId("");
+                    }
+                  }}
                   className={cn(
                     "rounded-lg border p-3 text-left transition",
                     mode === m.id
@@ -519,6 +569,7 @@ function ReviewPageContent() {
             </CardContent>
           </Card>
 
+          {mode !== "errors" && (
           <Card>
             <CardHeader>
               <h2 className="font-semibold">3. Наша позиция в договоре</h2>
@@ -560,8 +611,9 @@ function ReviewPageContent() {
               ))}
             </CardContent>
           </Card>
+          )}
 
-          {reviewPosition === "gc_vs_contractor" && selectedPosition.industry === "construction" && (
+          {mode !== "errors" && reviewPosition === "gc_vs_contractor" && selectedPosition.industry === "construction" && (
             <Card>
               <CardHeader>
                 <h2 className="font-semibold">Каскадный анализ</h2>
@@ -615,6 +667,7 @@ function ReviewPageContent() {
             </Card>
           )}
 
+          {mode !== "errors" && (
           <Card>
             <CardHeader>
               <h2 className="font-semibold">4. Глубокая проверка (опционально)</h2>
@@ -637,10 +690,13 @@ function ReviewPageContent() {
               </label>
             </CardContent>
           </Card>
+          )}
 
           <Card>
             <CardHeader>
-              <h2 className="font-semibold">5. Комментарий юриста (опционально)</h2>
+              <h2 className="font-semibold">
+                {mode === "errors" ? "3. Комментарий юриста (опционально)" : "5. Комментарий юриста (опционально)"}
+              </h2>
             </CardHeader>
             <CardContent>
               <textarea
@@ -653,7 +709,7 @@ function ReviewPageContent() {
             </CardContent>
           </Card>
 
-          {referenceDocs.length > 0 && (
+          {mode !== "errors" && referenceDocs.length > 0 && (
             <Card>
               <CardHeader>
                 <h2 className="font-semibold">6. Сравнить с эталоном компании (опционально)</h2>
@@ -732,7 +788,9 @@ function ReviewPageContent() {
           onRefine={task.status === "completed" ? handleRefine : undefined}
           onApproveToVault={task.status === "completed" ? handleApproveToVault : undefined}
           onDismissFindings={task.status === "completed" ? handleDismissFindings : undefined}
+          onSectionRecheck={task.status === "completed" ? handleSectionRecheck : undefined}
           refining={refining}
+          sectionRechecking={sectionRechecking}
           approving={approving}
           dismissing={dismissing}
           actions={
@@ -761,6 +819,7 @@ function ReviewPageContent() {
                   setReferenceDocId("");
                   setError(null);
                   setRefining(false);
+                  setSectionRechecking(false);
                 }}
               >
                 Новая проверка

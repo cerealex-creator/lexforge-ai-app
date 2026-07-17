@@ -21,7 +21,7 @@ SEVERITY_COLORS = {
     "low": "E2EFDA",
 }
 
-MODE_LABELS = {"full": "Полная проверка", "errors": "Ошибки", "risks": "Угрозы и риски"}
+MODE_LABELS = {"full": "Полная проверка", "errors": "Проверка на ошибки", "risks": "Угрозы и риски"}
 INDUSTRY_LABELS = {
     "construction": "Строительство",
     "production": "Производство",

@@ -5,7 +5,14 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { AuthGuard } from "@/components/auth-guard";
 import { AppShell } from "@/components/app-shell";
-import { ReviewResultPanel, type RefineRequest, type AnnotatedExportOptions, type ProtocolExportOptions, type RevisedExportOptions } from "@/components/review-result-panel";
+import {
+  ReviewResultPanel,
+  type RefineRequest,
+  type AnnotatedExportOptions,
+  type ProtocolExportOptions,
+  type RevisedExportOptions,
+  type SectionRecheckRequest,
+} from "@/components/review-result-panel";
 import { CreateProjectFromResultButton } from "@/components/create-project-from-result";
 import { Button } from "@/components/ui/button";
 import { useAuthStore, useActiveCompany } from "@/lib/store";
@@ -31,6 +38,7 @@ function ReviewTaskPageContent() {
   const [dismissing, setDismissing] = useState(false);
   const [exportingProtocol, setExportingProtocol] = useState(false);
   const [exportingRevised, setExportingRevised] = useState(false);
+  const [sectionRechecking, setSectionRechecking] = useState(false);
 
   useEffect(() => {
     if (!company) return;
@@ -39,14 +47,39 @@ function ReviewTaskPageContent() {
 
   useEffect(() => {
     if (!company) return;
-    reviewApi
-      .getReview(token, taskId, company.id)
-      .then(async (t) => {
-        setTask(t);
-        const doc = await documentApi.get(token, t.document_id, company.id);
-        setDocumentTitle(doc.title);
-      })
-      .catch((e) => setError(e instanceof ApiError ? e.message : "Не удалось загрузить проверку"));
+    let cancelled = false;
+    let interval: ReturnType<typeof setInterval> | null = null;
+
+    const refresh = async (loadDocument = false): Promise<boolean> => {
+      try {
+        const next = await reviewApi.getReview(token, taskId, company.id);
+        if (cancelled) return true;
+        setTask(next);
+        if (loadDocument) {
+          const doc = await documentApi.get(token, next.document_id, company.id);
+          if (!cancelled) setDocumentTitle(doc.title);
+        }
+        if (next.status === "completed" || next.status === "failed") {
+          if (interval) clearInterval(interval);
+          interval = null;
+          return true;
+        }
+        return false;
+      } catch (e) {
+        if (!cancelled) {
+          setError(e instanceof ApiError ? e.message : "Не удалось загрузить проверку");
+        }
+        return false;
+      }
+    };
+
+    void refresh(true).then((terminal) => {
+      if (!cancelled && !terminal) interval = setInterval(() => void refresh(), 2000);
+    });
+    return () => {
+      cancelled = true;
+      if (interval) clearInterval(interval);
+    };
   }, [token, company, taskId]);
 
   const handleExport = async () => {
@@ -175,6 +208,32 @@ function ReviewTaskPageContent() {
     }
   };
 
+  const handleSectionRecheck = async (req: SectionRecheckRequest) => {
+    if (!company || !task) return;
+    setSectionRechecking(true);
+    setExportError(null);
+    try {
+      const next = await reviewApi.startReview(token, {
+        document_id: task.document_id,
+        company_id: company.id,
+        review_mode: task.review_mode,
+        industry: task.industry,
+        multi_agent: false,
+        review_position: task.review_position ?? undefined,
+        reference_document_id: task.reference_document_id ?? undefined,
+        parent_task_id: task.id,
+        refine_scope: "section_recheck",
+        section_recheck: { id: req.section.id },
+        lawyer_notes: req.lawyerComment,
+        dismissed_findings: task.result?.dismissed_findings ?? [],
+      });
+      router.push(`/contracts/review/${next.id}`);
+    } catch (e) {
+      setExportError(e instanceof ApiError ? e.message : "Не удалось запустить углублённую проверку");
+      setSectionRechecking(false);
+    }
+  };
+
   const handleApproveToVault = async (findings: import("@/lib/api").Finding[]) => {
     if (!company || !task || !findings.length) return;
     setApproving(true);
@@ -257,7 +316,9 @@ function ReviewTaskPageContent() {
           onRefine={task.status === "completed" ? handleRefine : undefined}
           onApproveToVault={task.status === "completed" ? handleApproveToVault : undefined}
           onDismissFindings={task.status === "completed" ? handleDismissFindings : undefined}
+          onSectionRecheck={task.status === "completed" ? handleSectionRecheck : undefined}
           refining={refining}
+          sectionRechecking={sectionRechecking}
           approving={approving}
           dismissing={dismissing}
           actions={

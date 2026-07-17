@@ -69,6 +69,62 @@ class ReviewDismissRequest(BaseModel):
     findings: list[FindingOut] = Field(default_factory=list)
 
 
+class CoverageSectionOut(BaseModel):
+    id: str = ""
+    title: str = ""
+    clause_refs: list[str] = Field(default_factory=list)
+    summary: str = ""
+    status: str = "uncertain"
+    safety_assessment: str = ""
+
+
+class CoverageRequirementOut(BaseModel):
+    name: str = ""
+    status: str = "uncertain"
+    clause_refs: list[str] = Field(default_factory=list)
+    assessment: str = ""
+    safety_reason: str = ""
+
+
+class MissingProvisionOut(BaseModel):
+    name: str = ""
+    relevance: str = ""
+    impact: str = ""
+    recommendation: str = ""
+
+
+class CoverageMapOut(BaseModel):
+    overview: str = ""
+    structure_summary: str = ""
+    sections: list[CoverageSectionOut] = Field(default_factory=list)
+    requirements: list[CoverageRequirementOut] = Field(default_factory=list)
+    missing_provisions: list[MissingProvisionOut] = Field(default_factory=list)
+    uncertainties: list[str] = Field(default_factory=list)
+    coverage_stats: dict[str, int] = Field(default_factory=dict)
+    conclusion: str = ""
+
+
+class SectionRecheckIn(BaseModel):
+    id: str
+    title: str = ""
+    clause_refs: list[str] = Field(default_factory=list)
+    summary: str = ""
+    safety_assessment: str = ""
+
+
+class SectionReviewOut(BaseModel):
+    section_id: str = ""
+    section_title: str = ""
+    clause_refs: list[str] = Field(default_factory=list)
+    lawyer_comment: str = ""
+    summary: str = ""
+    conclusion: str = ""
+    safety_assessment: str = ""
+    status: str = "uncertain"
+    checked_aspects: list[str] = Field(default_factory=list)
+    uncertainties: list[str] = Field(default_factory=list)
+
+
 class ReviewCreateRequest(BaseModel):
     document_id: uuid.UUID
     company_id: uuid.UUID
@@ -83,11 +139,12 @@ class ReviewCreateRequest(BaseModel):
     upstream_document_id: Optional[uuid.UUID] = None
     # Refine / re-review
     parent_task_id: Optional[uuid.UUID] = None
-    refine_scope: Optional[Literal["focus_only", "supplement"]] = None
+    refine_scope: Optional[Literal["focus_only", "supplement", "section_recheck"]] = None
     accepted_findings: list[FindingOut] = Field(default_factory=list)
     finding_feedback: list[FindingFeedbackIn] = Field(default_factory=list)
     lawyer_notes: Optional[str] = None
     dismissed_findings: list[FindingOut] = Field(default_factory=list)
+    section_recheck: Optional[SectionRecheckIn] = None
     project_id: Optional[uuid.UUID] = None
 
 
@@ -107,6 +164,9 @@ class ReviewResultOut(BaseModel):
     deferred_count: Optional[int] = None
     dismissed_count: Optional[int] = None
     cascade_analysis: Optional[bool] = None
+    coverage_map: Optional[CoverageMapOut] = None
+    coverage_map_error: Optional[str] = None
+    section_rechecks: list[SectionReviewOut] = Field(default_factory=list)
 
 
 class ReviewTaskOut(BaseModel):
