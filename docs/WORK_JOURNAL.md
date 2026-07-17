@@ -1104,3 +1104,10 @@
 **Файлы:** `deploy/scripts/*`, `apps/web/src/app/contracts/create/page.tsx`, `docs/DEPLOY.md`.
 **Статус:** Завершено (нужен pull + повтор first-deploy на сервере).
 **Следующий шаг:** На сервере `git pull` и `bash deploy/scripts/first-deploy.sh`.
+
+## 2026-07-18 — Фикс next build: hasHydrated SSR
+**Запрос:** Ошибка prerender `/consulting/decision` (hasHydrated undefined); вопрос про npm audit.
+**Сделано:** `useAuthHydrated` не обращается к `persist` при SSR — только в `useEffect` на клиенте.
+**Файлы:** `apps/web/src/lib/store.ts`.
+**Статус:** Завершено.
+**Следующий шаг:** `git pull` + `first-deploy.sh` на сервере.

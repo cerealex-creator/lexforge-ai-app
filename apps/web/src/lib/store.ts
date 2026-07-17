@@ -49,14 +49,20 @@ export const useAuthStore = create<AuthState>()(
 
 /** Wait until persisted auth state is loaded from localStorage (avoids false "logged out" on refresh). */
 export function useAuthHydrated() {
-  const [hydrated, setHydrated] = useState(() => useAuthStore.persist.hasHydrated());
+  // Always start false — do not touch persist during SSR/prerender (persist API is client-only).
+  const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
-    if (useAuthStore.persist.hasHydrated()) {
+    const persistApi = useAuthStore.persist;
+    if (!persistApi) {
       setHydrated(true);
       return;
     }
-    return useAuthStore.persist.onFinishHydration(() => setHydrated(true));
+    if (persistApi.hasHydrated()) {
+      setHydrated(true);
+      return;
+    }
+    return persistApi.onFinishHydration(() => setHydrated(true));
   }, []);
 
   return hydrated;
