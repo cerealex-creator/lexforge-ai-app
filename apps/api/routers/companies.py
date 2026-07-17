@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from apps.api.dependencies import get_current_user, get_db, require_admin
+from apps.api.dependencies import get_current_user, get_db
 from apps.api.schemas import CompanyCreate, CompanyOut, MessageResponse
 from packages.db.models import Company, User, UserCompanyRole, UserRole
 
@@ -32,9 +32,10 @@ async def list_companies(
 @router.post("", response_model=CompanyOut, status_code=status.HTTP_201_CREATED)
 async def create_company(
     body: CompanyCreate,
-    user: Annotated[User, Depends(require_admin)],
+    user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
+    """Any authenticated user may create a company and become its admin."""
     company = Company(name=body.name, inn=body.inn)
     db.add(company)
     await db.flush()

@@ -14,6 +14,7 @@ class RegisterRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=6)
     full_name: str = Field(min_length=2)
+    company_name: Optional[str] = Field(default=None, min_length=2)
 
 
 class UserOut(BaseModel):

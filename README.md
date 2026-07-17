@@ -146,3 +146,11 @@ make web       # Frontend
 make seed      # Демо-данные
 make migrate   # Alembic upgrade
 ```
+
+## Деплой на сервер
+
+См. подробную инструкцию: [`docs/DEPLOY.md`](docs/DEPLOY.md)
+
+Кратко: подготовка Ubuntu → `.env` → `bash deploy/scripts/first-deploy.sh`.
+Обновления: `git pull && bash deploy/scripts/update.sh`.
+Регистрация пользователей: `/register`.

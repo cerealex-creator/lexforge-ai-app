@@ -121,10 +121,10 @@ export const api = {
       body: JSON.stringify({ email, password }),
     }),
 
-  register: (email: string, password: string, full_name: string) =>
+  register: (email: string, password: string, full_name: string, company_name?: string) =>
     request<AuthResponse>("/api/v1/auth/register", {
       method: "POST",
-      body: JSON.stringify({ email, password, full_name }),
+      body: JSON.stringify({ email, password, full_name, company_name }),
     }),
 
   me: (token: string) =>

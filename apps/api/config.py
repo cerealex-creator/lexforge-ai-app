@@ -17,6 +17,18 @@ class Settings(BaseSettings):
     api_host: str = "0.0.0.0"
     api_port: int = 8000
     web_url: str = "http://localhost:3000"
+    # Comma-separated extra origins for production (e.g. https://lexforge.example.com,http://85.239.40.180)
+    cors_origins: str = ""
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        origins = [self.web_url, "http://localhost:3000", "http://127.0.0.1:3000"]
+        for part in self.cors_origins.split(","):
+            value = part.strip()
+            if value:
+                origins.append(value)
+        # Preserve order, drop duplicates
+        return list(dict.fromkeys(origins))
 
     database_url: str = "postgresql+asyncpg://lexforge:lexforge@localhost:5432/lexforge"
     redis_url: str = "redis://localhost:6379/0"

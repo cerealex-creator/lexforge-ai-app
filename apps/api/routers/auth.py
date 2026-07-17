@@ -14,7 +14,7 @@ from apps.api.database import (
 )
 from apps.api.dependencies import get_current_user, get_db
 from apps.api.schemas import LoginRequest, MessageResponse, RegisterRequest, TokenResponse, UserOut
-from packages.db.models import User, UserCompanyRole, UserRole
+from packages.db.models import Company, User, UserCompanyRole, UserRole
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -58,6 +58,14 @@ async def register(body: RegisterRequest, db: Annotated[AsyncSession, Depends(ge
         full_name=body.full_name,
     )
     db.add(user)
+    await db.flush()
+
+    company_name = (body.company_name or "").strip() or f"Компания {body.full_name}"
+    company = Company(name=company_name)
+    db.add(company)
+    await db.flush()
+    db.add(UserCompanyRole(user_id=user.id, company_id=company.id, role=UserRole.admin))
+
     await db.commit()
     await db.refresh(user)
 

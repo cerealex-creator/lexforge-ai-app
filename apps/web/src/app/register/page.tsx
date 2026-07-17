@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -13,36 +13,26 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 
-const schema = z.object({
-  email: z.string().email("Введите корректный email"),
-  password: z.string().min(6, "Минимум 6 символов"),
-});
+const schema = z
+  .object({
+    full_name: z.string().min(2, "Укажите имя"),
+    email: z.string().email("Введите корректный email"),
+    company_name: z.string().min(2, "Укажите название компании"),
+    password: z.string().min(6, "Минимум 6 символов"),
+    password_confirm: z.string().min(6, "Минимум 6 символов"),
+  })
+  .refine((data) => data.password === data.password_confirm, {
+    message: "Пароли не совпадают",
+    path: ["password_confirm"],
+  });
 
 type FormData = z.infer<typeof schema>;
 
-export default function LoginPage() {
+export default function RegisterPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
   const setAuth = useAuthStore((s) => s.setAuth);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    if (searchParams.get("expired") === "1") {
-      setNotice("Сессия истекла. Войдите снова.");
-    }
-    fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/health`)
-      .then((r) => r.json())
-      .then((h) => {
-        if (h.database === false) {
-          setNotice("База данных недоступна. Проверьте PostgreSQL на сервере.");
-        }
-      })
-      .catch(() => {
-        setNotice("API не отвечает. Если это локальный запуск — выполните make api.");
-      });
-  }, [searchParams]);
 
   const {
     register,
@@ -50,14 +40,13 @@ export default function LoginPage() {
     formState: { errors },
   } = useForm<FormData>({
     resolver: zodResolver(schema),
-    defaultValues: { email: "", password: "" },
   });
 
   const onSubmit = async (data: FormData) => {
     setLoading(true);
     setError(null);
     try {
-      const res = await api.login(data.email, data.password);
+      const res = await api.register(data.email, data.password, data.full_name, data.company_name);
       setAuth(res.access_token, res.user, res.companies);
       router.push("/dashboard");
     } catch (e) {
@@ -66,7 +55,7 @@ export default function LoginPage() {
           ? e.message
           : e instanceof Error
             ? e.message
-            : "Ошибка входа",
+            : "Ошибка регистрации",
       );
     } finally {
       setLoading(false);
@@ -82,37 +71,57 @@ export default function LoginPage() {
               <Scale className="h-5 w-5 text-white" />
             </div>
             <div>
-              <h1 className="text-xl font-bold text-slate-900">LexForge AI</h1>
-              <p className="text-sm text-slate-500">Юридический AI-ассистент</p>
+              <h1 className="text-xl font-bold text-slate-900">Регистрация</h1>
+              <p className="text-sm text-slate-500">Создайте аккаунт LexForge AI</p>
             </div>
           </div>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
             <div>
+              <label className="mb-1 block text-sm font-medium text-slate-700">ФИО</label>
+              <Input {...register("full_name")} placeholder="Иванов Иван Иванович" />
+              {errors.full_name && (
+                <p className="mt-1 text-xs text-red-600">{errors.full_name.message}</p>
+              )}
+            </div>
+            <div>
               <label className="mb-1 block text-sm font-medium text-slate-700">Email</label>
               <Input type="email" {...register("email")} placeholder="you@company.ru" />
               {errors.email && <p className="mt-1 text-xs text-red-600">{errors.email.message}</p>}
             </div>
             <div>
+              <label className="mb-1 block text-sm font-medium text-slate-700">Компания</label>
+              <Input {...register("company_name")} placeholder="ООО «Ваша компания»" />
+              {errors.company_name && (
+                <p className="mt-1 text-xs text-red-600">{errors.company_name.message}</p>
+              )}
+            </div>
+            <div>
               <label className="mb-1 block text-sm font-medium text-slate-700">Пароль</label>
               <Input type="password" {...register("password")} />
-              {errors.password && <p className="mt-1 text-xs text-red-600">{errors.password.message}</p>}
+              {errors.password && (
+                <p className="mt-1 text-xs text-red-600">{errors.password.message}</p>
+              )}
             </div>
-            {notice && (
-              <div className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">{notice}</div>
-            )}
+            <div>
+              <label className="mb-1 block text-sm font-medium text-slate-700">Повтор пароля</label>
+              <Input type="password" {...register("password_confirm")} />
+              {errors.password_confirm && (
+                <p className="mt-1 text-xs text-red-600">{errors.password_confirm.message}</p>
+              )}
+            </div>
             {error && (
               <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>
             )}
             <Button type="submit" className="w-full" loading={loading}>
-              Войти
+              Зарегистрироваться
             </Button>
           </form>
           <p className="mt-4 text-center text-sm text-slate-500">
-            Нет аккаунта?{" "}
-            <Link href="/register" className="font-medium text-brand-600 hover:underline">
-              Зарегистрироваться
+            Уже есть аккаунт?{" "}
+            <Link href="/login" className="font-medium text-brand-600 hover:underline">
+              Войти
             </Link>
           </p>
         </CardContent>

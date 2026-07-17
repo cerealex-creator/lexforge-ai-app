@@ -1084,3 +1084,14 @@
 - У процессуального multi-agent агента убран акцент на «ошибках оформления» в смысле корректуры.
 **Файлы:** `services/prompt_engine/registry.py`, `docs/prompts_pack.md`.
 **Статус:** Завершено.
+
+## 2026-07-17 — Подготовка к деплою на VPS
+**Запрос:** Подготовить всё для деплоя: регистрация пользователей (хотя бы одного кроме админа) и понятный способ вносить доработки на сервере.
+**Сделано:**
+- Регистрация: `POST /auth/register` создаёт пользователя + компанию (роль admin); страница `/register`; ссылка со входа.
+- CORS через `CORS_ORIGINS` / `WEB_URL`.
+- Прод-артефакты: `deploy/docker-compose.prod.yml`, nginx, systemd, скрипты `setup-server` / `first-deploy` / `update` / `generate-secrets`.
+- Инструкция `docs/DEPLOY.md`: первый запуск и цикл обновлений `git pull` + `update.sh`.
+**Файлы/артефакты:** `deploy/`, `docs/DEPLOY.md`, `apps/web/src/app/register/`, `apps/api/routers/auth.py`, `apps/api/config.py`.
+**Статус:** Завершено (локально; на VPS ещё не развёрнуто).
+**Следующий шаг:** Закоммитить и запушить, затем на `85.239.40.180` пройти шаги из `docs/DEPLOY.md`.
