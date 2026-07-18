@@ -60,7 +60,7 @@ function formatHttpError(status: number, statusText: string, detail: unknown): s
   }
   if (status === 503 || status === 500) {
     if (msg && msg !== "Ошибка запроса" && msg !== "Internal Server Error") return msg;
-    return "База данных недоступна. Запустите Docker Desktop, затем в терминале: make up";
+    return "База данных недоступна. Проверьте PostgreSQL (docker ps) и перезапустите API.";
   }
   if (status === 404) {
     return `${msg || statusText}. Перезапустите backend: make api (нужна версия с модулем проверки договоров)`;

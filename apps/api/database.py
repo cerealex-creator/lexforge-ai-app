@@ -18,7 +18,8 @@ from apps.api.config import settings
 from packages.db.models import User, UserCompanyRole
 
 DB_UNAVAILABLE_MSG = (
-    "База данных недоступна. Запустите Docker Desktop, затем в терминале: make up"
+    "База данных недоступна. На сервере проверьте: "
+    "docker ps и docker compose -f /opt/lexforge/deploy/docker-compose.prod.yml --env-file /opt/lexforge/.env up -d"
 )
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
